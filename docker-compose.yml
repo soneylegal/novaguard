@@ -1,0 +1,120 @@
+# ─── NovaGuard — Docker Compose Stack ───
+#
+# Serviços:
+#   - api:         FastAPI (uvicorn, 4 workers)
+#   - postgres:    PostgreSQL 16 + TimescaleDB
+#   - redis:       Redis 7 (Cache + Celery Broker)
+#   - worker:      Celery Worker (enrichment + sink queues)
+#   - flower:      Celery Flower (monitoring UI)
+
+services:
+  # ── PostgreSQL + TimescaleDB ─────────────────────────────────
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: novaguard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-novaguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-novaguard_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-novaguard_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U novaguard -d novaguard_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (Cache + Broker) ───────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: novaguard-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  # ── FastAPI Application ──────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: novaguard-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://novaguard:novaguard_secret@postgres:5432/novaguard_db
+      DATABASE_URL_SYNC: postgresql+psycopg2://novaguard:novaguard_secret@postgres:5432/novaguard_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      bash -c "
+        alembic upgrade head &&
+        uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 4
+      "
+
+  # ── Celery Worker ────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: novaguard-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://novaguard:novaguard_secret@postgres:5432/novaguard_db
+      DATABASE_URL_SYNC: postgresql+psycopg2://novaguard:novaguard_secret@postgres:5432/novaguard_db
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A backend.workers.celery_app worker
+      --loglevel=info
+      --concurrency=4
+      --queues=enrichment,sink
+      --max-tasks-per-child=1000
+
+  # ── Celery Flower (Monitoring) ───────────────────────────────
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: novaguard-flower
+    restart: unless-stopped
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A backend.workers.celery_app flower --port=5555
+
+volumes:
+  pgdata:
+    driver: local
+  redisdata:
+    driver: local
