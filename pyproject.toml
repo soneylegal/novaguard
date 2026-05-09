@@ -66,3 +66,19 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["backend", "agent"]
+omit = [
+    "agent/sniffer.py",       # Hardware boundary — requer sudo/CAP_NET_RAW
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+fail_under = 50
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+]

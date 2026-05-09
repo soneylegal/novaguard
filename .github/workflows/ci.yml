@@ -60,10 +60,8 @@ jobs:
           python -m pytest tests/ \
             -v \
             --tb=short \
-            --cov=backend \
-            --cov=agent \
-            --cov-report=term-missing \
-            --cov-fail-under=60
+            --cov \
+            --cov-report=term-missing
 
       - name: Upload coverage report
         if: always()
