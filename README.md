@@ -240,4 +240,6 @@ Todas centralizadas em `.env` e carregadas via `pydantic_settings.BaseSettings`:
 
 ## Licença
 
-MIT
+Distribuído sob a licença MIT. Veja [`LICENSE`](LICENSE) para mais informações.
+
+© 2026 Davi Laurindo
