@@ -163,6 +163,28 @@ def main():
         default=None,
         help="ID único do agente (default: agent-<PID>)",
     )
+    parser.add_argument(
+        "--api-url",
+        default=os.getenv("API_GATEWAY_URL", "http://localhost:8000/api/v1/ingest"),
+        help="URL do API Gateway",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.getenv("AGENT_API_KEY", "agent-key-alpha-001"),
+        help="API Key para autenticação",
+    )
+    parser.add_argument(
+        "--buffer-interval",
+        type=int,
+        default=int(os.getenv("BUFFER_FLUSH_INTERVAL", "5")),
+        help="Intervalo de flush do buffer em segundos (default: 5)",
+    )
+    parser.add_argument(
+        "--buffer-size",
+        type=int,
+        default=int(os.getenv("BUFFER_FLUSH_SIZE", "1000")),
+        help="Tamanho máximo do buffer antes do flush (default: 1000)",
+    )
 
     args = parser.parse_args()
 
@@ -171,9 +193,20 @@ def main():
         format="%(asctime)s │ %(levelname)-8s │ %(name)s │ %(message)s",
     )
 
+    # Integração com BufferSender (backoff + SQLite fallback)
+    from agent.buffer_sender import BufferSender
+
+    sender = BufferSender(
+        api_url=args.api_url,
+        api_key=args.api_key,
+        flush_interval=args.buffer_interval,
+        flush_size=args.buffer_size,
+        agent_id=args.agent_id or f"agent-{os.getpid()}",
+    )
+
     sniffer = DNSSniffer(
         interface=args.interface,
-        callback=_default_callback,
+        callback=sender.enqueue,
         agent_id=args.agent_id,
     )
 
@@ -181,10 +214,14 @@ def main():
     def signal_handler(sig, frame):
         logger.info("Shutdown signal received...")
         sniffer.stop()
+        sender.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+    # Inicia o sender em thread separada
+    sender.start()
 
     # Inicia a captura (bloqueante)
     sniffer.start()
