@@ -13,35 +13,35 @@
 
 ```mermaid
 graph LR
-    subgraph Edge["🖥️ Edge Network"]
-        A["Scapy Sniffer<br/><i>UDP port 53</i>"]
-        B["Memory Buffer<br/><i>1000 logs / 5s</i>"]
-        C["SQLite Fallback<br/><i>Zero-Loss WAL</i>"]
+    subgraph Edge["Edge Network"]
+        A["Scapy Sniffer\nUDP port 53"]
+        B["Memory Buffer\n1000 logs / 5s"]
+        C["SQLite Fallback\nZero-Loss WAL"]
     end
 
-    subgraph Gateway["⚡ API Gateway"]
-        D["FastAPI<br/><i>202 Accepted</i>"]
-        E["X-API-KEY<br/><i>timing-safe</i>"]
+    subgraph Gateway["API Gateway"]
+        D["FastAPI\n202 Accepted"]
+        E["X-API-KEY\ntiming-safe"]
     end
 
-    subgraph Processing["🧠 Async Processing"]
-        F["Redis Cache<br/><i>Cache-Aside TTL 24h</i>"]
-        G["Celery Workers<br/><i>enrichment + sink</i>"]
+    subgraph Processing["Async Processing"]
+        F["Redis Cache\nCache-Aside TTL 24h"]
+        G["Celery Workers\nenrichment + sink"]
     end
 
-    subgraph Storage["🗄️ Persistence"]
-        H["PostgreSQL<br/><i>TimescaleDB</i>"]
-        I["Threat Intel<br/><i>Domain Blacklist</i>"]
+    subgraph Storage["Persistence"]
+        H["PostgreSQL\nTimescaleDB"]
+        I["Threat Intel\nDomain Blacklist"]
     end
 
     A --> B
-    B -->|"HTTP POST<br/>batch"| D
+    B -->|"HTTP POST batch"| D
     B -.->|"API offline"| C
     C -.->|"drain FIFO"| B
     D --> E
     E -->|"Celery Queue"| G
     G <-->|"pipeline GET/SET"| F
-    G -->|"Bulk Insert<br/>1000/tx"| H
+    G -->|"Bulk Insert 1000/tx"| H
     G <-->|"threat lookup"| I
 ```
 
