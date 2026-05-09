@@ -4,9 +4,6 @@ NovaGuard — Alembic env.py
 Configuração de migrações com suporte a:
   - Modelos SQLAlchemy auto-detectados
   - URL do banco via variável de ambiente
-
-NOTA: target_metadata será configurado quando os modelos
-SQLAlchemy forem implementados (Commit 2).
 """
 
 from __future__ import annotations
@@ -21,6 +18,8 @@ from sqlalchemy import engine_from_config, pool
 # Adiciona o diretório raiz ao path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from backend.infrastructure.db.models import Base
+
 # Alembic Config object
 config = context.config
 
@@ -28,8 +27,8 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# MetaData para 'autogenerate' — será substituído ao criar os modelos
-target_metadata = None
+# MetaData para 'autogenerate'
+target_metadata = Base.metadata
 
 # URL do banco via env
 database_url = os.getenv(
