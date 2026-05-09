@@ -5,7 +5,8 @@ Configura:
   - Middlewares (CORS, Rate Limiting, Request ID)
   - Lifecycle hooks (startup/shutdown)
   - OpenAPI metadata
-  - Routers: ingest (POST /api/v1/ingest)
+  - Routers: ingest (POST /api/v1/ingest), query (GET /api/v1/query)
+  - Lifecycle: Redis connection management
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from backend.api.v1.ingest_router import router as ingest_router
+from backend.api.v1.query_router import router as query_router
+from backend.core.cache import get_redis
 from backend.core.config import get_settings
 
 # ── Logging ──────────────────────────────────────────────────────
@@ -47,6 +50,14 @@ async def lifespan(app: FastAPI):
     logger.info("╔══════════════════════════════════════════════════╗")
     logger.info("║          NovaGuard Platform Starting...          ║")
     logger.info("╚══════════════════════════════════════════════════╝")
+
+    # Testar conexão Redis
+    try:
+        redis = await get_redis()
+        await redis.ping()
+        logger.info("✓ Redis connected")
+    except Exception as e:
+        logger.warning("✗ Redis unavailable: %s", e)
 
     logger.info("✓ NovaGuard API ready (env=%s)", settings.app_env)
 
@@ -113,3 +124,4 @@ async def root():
 # ── Routers ──────────────────────────────────────────────────────
 
 app.include_router(ingest_router, prefix="/api/v1/ingest", tags=["Ingest"])
+app.include_router(query_router, prefix="/api/v1/query", tags=["Query"])
