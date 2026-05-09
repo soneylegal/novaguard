@@ -46,7 +46,8 @@ def bulk_persist_logs(
     total = len(enriched_logs)
     logger.info(
         "Sink: persisting batch %s (%d logs)",
-        batch_id, total,
+        batch_id,
+        total,
     )
 
     try:
@@ -63,7 +64,10 @@ def bulk_persist_logs(
             inserted += count
             logger.debug(
                 "Batch %s: chunk %d-%d persisted (%d records)",
-                batch_id, i, i + len(chunk), count,
+                batch_id,
+                i,
+                i + len(chunk),
+                count,
             )
 
         repo.close()
@@ -80,6 +84,8 @@ def bulk_persist_logs(
     except Exception as exc:
         logger.error(
             "Sink: batch %s persistence failed: %s",
-            batch_id, exc, exc_info=True,
+            batch_id,
+            exc,
+            exc_info=True,
         )
         raise self.retry(exc=exc, countdown=10 * (self.request.retries + 1))

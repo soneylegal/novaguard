@@ -7,15 +7,12 @@ sem dependência de rede ou API real.
 
 from __future__ import annotations
 
-import json
-import os
 import sqlite3
-import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from agent.buffer_sender import BufferSender, INITIAL_BACKOFF_SECONDS, MAX_BACKOFF_SECONDS
+from agent.buffer_sender import INITIAL_BACKOFF_SECONDS, MAX_BACKOFF_SECONDS, BufferSender
 
 
 @pytest.fixture
@@ -52,14 +49,16 @@ class TestBufferSender:
     def test_enqueue_multiple(self, sender):
         """Múltiplos enqueues devem acumular."""
         for i in range(50):
-            sender.enqueue({"domain": f"test{i}.com", "source_ip": "10.0.0.1", "destination_ip": "8.8.8.8"})
+            sender.enqueue(
+                {"domain": f"test{i}.com", "source_ip": "10.0.0.1", "destination_ip": "8.8.8.8"}
+            )
         assert len(sender._buffer) == 50
         assert sender.stats["total_enqueued"] == 50
 
     def test_flush_clears_buffer(self, sender):
         """Flush deve esvaziar o buffer."""
         sender.enqueue({"domain": "test.com", "source_ip": "10.0.0.1", "destination_ip": "8.8.8.8"})
-        
+
         # Mock o envio para falhar (vai para SQLite)
         sender._send_batch = MagicMock(return_value=False)
         sender._flush()

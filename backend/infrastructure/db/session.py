@@ -10,7 +10,7 @@ Configura:
 from __future__ import annotations
 
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import (
@@ -64,6 +64,7 @@ SyncSessionLocal = sessionmaker(
 
 
 # ── Dependency Injection (FastAPI) ───────────────────────────────
+
 
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     """

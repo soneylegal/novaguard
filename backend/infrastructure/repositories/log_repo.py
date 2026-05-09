@@ -12,11 +12,11 @@ Tanto na versão assíncrona (FastAPI) quanto síncrona (Celery).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Sequence
-from uuid import UUID
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from sqlalchemy import Select, and_, desc, func, insert, select, text
+from sqlalchemy import desc, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
@@ -38,12 +38,12 @@ class LogRepository(BaseRepository[DNSLog]):
 
     async def get_logs_filtered(
         self,
-        domain: Optional[str] = None,
-        threat_level: Optional[str] = None,
-        agent_id: Optional[str] = None,
-        source_ip: Optional[str] = None,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
+        domain: str | None = None,
+        threat_level: str | None = None,
+        agent_id: str | None = None,
+        source_ip: str | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
         offset: int = 0,
         limit: int = 100,
     ) -> tuple[Sequence[DNSLog], int]:
@@ -132,24 +132,19 @@ class LogRepository(BaseRepository[DNSLog]):
         Estatísticas agregadas para o dashboard principal.
         Executa múltiplas queries otimizadas em paralelo (via pipeline).
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         day_ago = now - timedelta(hours=24)
 
         # Total de logs
         total_logs = await self.count()
 
         # Logs nas últimas 24h
-        stmt_24h = (
-            select(func.count())
-            .select_from(DNSLog)
-            .where(DNSLog.timestamp >= day_ago)
-        )
+        stmt_24h = select(func.count()).select_from(DNSLog).where(DNSLog.timestamp >= day_ago)
         logs_24h = (await self.session.execute(stmt_24h)).scalar_one()
 
         # Contagem por threat_level
-        stmt_threat = (
-            select(DNSLog.threat_level, func.count(DNSLog.id))
-            .group_by(DNSLog.threat_level)
+        stmt_threat = select(DNSLog.threat_level, func.count(DNSLog.id)).group_by(
+            DNSLog.threat_level
         )
         threat_counts = dict((await self.session.execute(stmt_threat)).all())
 
@@ -170,12 +165,12 @@ class LogRepository(BaseRepository[DNSLog]):
 
     @staticmethod
     def _build_filters(
-        domain: Optional[str],
-        threat_level: Optional[str],
-        agent_id: Optional[str],
-        source_ip: Optional[str],
-        start_time: Optional[datetime],
-        end_time: Optional[datetime],
+        domain: str | None,
+        threat_level: str | None,
+        agent_id: str | None,
+        source_ip: str | None,
+        start_time: datetime | None,
+        end_time: datetime | None,
     ) -> list:
         """Constrói lista de condições SQLAlchemy a partir dos filtros."""
         conditions = []

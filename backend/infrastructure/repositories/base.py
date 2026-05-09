@@ -11,10 +11,11 @@ do acesso a dados. Facilita:
 from __future__ import annotations
 
 import logging
-from typing import Any, Generic, List, Optional, Sequence, Type, TypeVar
+from collections.abc import Sequence
+from typing import Any, Generic, TypeVar
 from uuid import UUID
 
-from sqlalchemy import select, func, delete
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.infrastructure.db.models import Base
@@ -32,7 +33,7 @@ class BaseRepository(Generic[ModelType]):
     e podem adicionar métodos específicos de domínio.
     """
 
-    def __init__(self, model: Type[ModelType], session: AsyncSession):
+    def __init__(self, model: type[ModelType], session: AsyncSession):
         self.model = model
         self.session = session
 
@@ -43,7 +44,7 @@ class BaseRepository(Generic[ModelType]):
         await self.session.flush()
         return instance
 
-    async def get_by_id(self, entity_id: UUID) -> Optional[ModelType]:
+    async def get_by_id(self, entity_id: UUID) -> ModelType | None:
         """Busca uma entidade pelo ID primário."""
         return await self.session.get(self.model, entity_id)
 
@@ -53,11 +54,7 @@ class BaseRepository(Generic[ModelType]):
         limit: int = 100,
     ) -> Sequence[ModelType]:
         """Retorna entidades com paginação."""
-        stmt = (
-            select(self.model)
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = select(self.model).offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
@@ -76,7 +73,7 @@ class BaseRepository(Generic[ModelType]):
         await self.session.flush()
         return True
 
-    async def bulk_create(self, items: List[dict[str, Any]]) -> int:
+    async def bulk_create(self, items: list[dict[str, Any]]) -> int:
         """
         Inserção em lote usando `insert().values()`.
         Drasticamente mais rápido que criar instâncias individuais.
@@ -88,6 +85,7 @@ class BaseRepository(Generic[ModelType]):
             return 0
 
         from sqlalchemy import insert
+
         stmt = insert(self.model).values(items)
         await self.session.execute(stmt)
         await self.session.flush()

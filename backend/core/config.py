@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from typing import List
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -44,7 +43,7 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/2"
 
     # ── Security ─────────────────────────────────────────────────
-    api_keys: List[str] = []
+    api_keys: list[str] = []
 
     @field_validator("api_keys", mode="before")
     @classmethod

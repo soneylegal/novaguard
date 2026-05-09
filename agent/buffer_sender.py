@@ -21,7 +21,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -219,8 +219,7 @@ class BufferSender:
 
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             logger.warning(
-                "Batch #%d send failed (API unreachable): %s. "
-                "Next retry in %ds.",
+                "Batch #%d send failed (API unreachable): %s. " "Next retry in %ds.",
                 self._batch_sequence,
                 type(e).__name__,
                 self._current_backoff,
@@ -231,7 +230,9 @@ class BufferSender:
         except Exception as e:
             logger.error(
                 "Batch #%d unexpected error: %s",
-                self._batch_sequence, e, exc_info=True,
+                self._batch_sequence,
+                e,
+                exc_info=True,
             )
             self._escalate_backoff()
             return False
@@ -269,7 +270,7 @@ class BufferSender:
                 "INSERT INTO pending_logs (batch_data, created_at) VALUES (?, ?)",
                 (
                     json.dumps(logs, default=str),
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(UTC).isoformat(),
                 ),
             )
             conn.commit()
@@ -291,9 +292,7 @@ class BufferSender:
         """
         try:
             conn = sqlite3.connect(self._sqlite_path)
-            cursor = conn.execute(
-                "SELECT id, batch_data FROM pending_logs ORDER BY id ASC LIMIT 1"
-            )
+            cursor = conn.execute("SELECT id, batch_data FROM pending_logs ORDER BY id ASC LIMIT 1")
             row = cursor.fetchone()
 
             if row is None:

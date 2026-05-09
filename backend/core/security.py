@@ -41,10 +41,7 @@ async def validate_api_key(
         )
 
     # Comparação em tempo constante contra todas as chaves configuradas
-    is_valid = any(
-        secrets.compare_digest(api_key, valid_key)
-        for valid_key in settings.api_keys
-    )
+    is_valid = any(secrets.compare_digest(api_key, valid_key) for valid_key in settings.api_keys)
 
     if not is_valid:
         raise HTTPException(

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,12 +47,12 @@ router = APIRouter(tags=["Consultas & Dashboard"])
 async def list_logs(
     session: Annotated[AsyncSession, Depends(get_async_session)],
     _api_key: Annotated[str, Depends(validate_api_key)],
-    domain: Optional[str] = Query(None, description="Filtro por domínio (parcial)"),
-    threat_level: Optional[str] = Query(None, description="Filtro por nível de ameaça"),
-    agent_id: Optional[str] = Query(None, description="Filtro por ID do agente"),
-    source_ip: Optional[str] = Query(None, description="Filtro por IP de origem"),
-    start_time: Optional[datetime] = Query(None, description="Início do período (ISO 8601)"),
-    end_time: Optional[datetime] = Query(None, description="Fim do período (ISO 8601)"),
+    domain: str | None = Query(None, description="Filtro por domínio (parcial)"),
+    threat_level: str | None = Query(None, description="Filtro por nível de ameaça"),
+    agent_id: str | None = Query(None, description="Filtro por ID do agente"),
+    source_ip: str | None = Query(None, description="Filtro por IP de origem"),
+    start_time: datetime | None = Query(None, description="Início do período (ISO 8601)"),
+    end_time: datetime | None = Query(None, description="Fim do período (ISO 8601)"),
     page: int = Query(1, ge=1, description="Número da página"),
     page_size: int = Query(50, ge=1, le=500, description="Itens por página"),
 ) -> LogListResponse:

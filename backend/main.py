@@ -41,6 +41,7 @@ limiter = Limiter(key_func=get_remote_address, default_limits=[settings.rate_lim
 
 # ── Lifecycle ────────────────────────────────────────────────────
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -109,6 +110,7 @@ async def add_request_id(request: Request, call_next) -> Response:
 
 
 # ── Root ─────────────────────────────────────────────────────────
+
 
 @app.get("/", tags=["Root"])
 async def root():

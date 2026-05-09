@@ -10,7 +10,6 @@ Implementa o padrão Cache-Aside para domínios DNS:
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import redis.asyncio as aioredis
 
@@ -19,7 +18,7 @@ from backend.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 # ── Singleton ────────────────────────────────────────────────────
-_redis_client: Optional[aioredis.Redis] = None
+_redis_client: aioredis.Redis | None = None
 
 
 async def get_redis() -> aioredis.Redis:
@@ -50,7 +49,8 @@ async def close_redis() -> None:
 
 # ── Cache-Aside Helpers ──────────────────────────────────────────
 
-async def cache_get_domain(domain: str) -> Optional[str]:
+
+async def cache_get_domain(domain: str) -> str | None:
     """
     Consulta o cache para verificar a classificação de um domínio.
 
@@ -81,7 +81,7 @@ async def cache_set_domain(domain: str, classification: str) -> None:
     logger.debug("Cache SET: %s → %s (TTL=%ds)", domain, classification, settings.cache_ttl_seconds)
 
 
-async def cache_get_domains_batch(domains: list[str]) -> dict[str, Optional[str]]:
+async def cache_get_domains_batch(domains: list[str]) -> dict[str, str | None]:
     """
     Consulta em lote usando pipeline Redis para minimizar roundtrips.
 

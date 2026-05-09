@@ -13,7 +13,7 @@ Pipeline de enriquecimento do lote DNS:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import redis as sync_redis
@@ -60,7 +60,9 @@ def process_and_enrich_batch(
     """
     logger.info(
         "Processing batch %s: %d logs from agent '%s'",
-        batch_id, len(logs), agent_id,
+        batch_id,
+        len(logs),
+        agent_id,
     )
 
     try:
@@ -117,29 +119,32 @@ def process_and_enrich_batch(
 
             logger.info(
                 "Batch %s: cached %d new domain classifications",
-                batch_id, len(uncached_domains),
+                batch_id,
+                len(uncached_domains),
             )
 
         # ── 5. Enriquecer cada log ───────────────────────────────
         enriched_logs = []
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         for log in logs:
             domain = log["domain"]
             threat = classifications.get(domain, "unknown")
 
-            enriched_logs.append({
-                "timestamp": log["timestamp"],
-                "source_ip": log["source_ip"],
-                "destination_ip": log["destination_ip"],
-                "domain": domain,
-                "query_type": log.get("query_type", "A"),
-                "protocol": log.get("protocol", "DNS"),
-                "agent_id": log.get("agent_id") or agent_id,
-                "threat_level": threat,
-                "threat_source": "threat_intel_db" if threat == "malicious" else None,
-                "enriched_at": now,
-            })
+            enriched_logs.append(
+                {
+                    "timestamp": log["timestamp"],
+                    "source_ip": log["source_ip"],
+                    "destination_ip": log["destination_ip"],
+                    "domain": domain,
+                    "query_type": log.get("query_type", "A"),
+                    "protocol": log.get("protocol", "DNS"),
+                    "agent_id": log.get("agent_id") or agent_id,
+                    "threat_level": threat,
+                    "threat_source": "threat_intel_db" if threat == "malicious" else None,
+                    "enriched_at": now,
+                }
+            )
 
         # ── 6. Despachar para o sink (persistência) ──────────────
         celery_app.send_task(
@@ -160,9 +165,7 @@ def process_and_enrich_batch(
             "unique_domains": len(unique_domains),
             "cache_hits": len(unique_domains) - len(uncached_domains),
             "cache_misses": len(uncached_domains),
-            "malicious_count": sum(
-                1 for c in classifications.values() if c == "malicious"
-            ),
+            "malicious_count": sum(1 for c in classifications.values() if c == "malicious"),
         }
 
         logger.info("Batch %s enrichment complete: %s", batch_id, result)

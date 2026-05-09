@@ -16,7 +16,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.core.config import Settings, get_settings
-from backend.core.security import validate_api_key
 
 
 def _make_test_settings() -> MagicMock:
@@ -30,9 +29,7 @@ def _make_test_settings() -> MagicMock:
     s.app_env = "testing"
     s.cache_ttl_seconds = 86400
     s.bulk_insert_size = 1000
-    s.database_url = (
-        "postgresql+asyncpg://novaguard:novaguard_secret@localhost:5432/novaguard_db"
-    )
+    s.database_url = "postgresql+asyncpg://novaguard:novaguard_secret@localhost:5432/novaguard_db"
     s.database_url_sync = (
         "postgresql+psycopg2://novaguard:novaguard_secret@localhost:5432/novaguard_db"
     )

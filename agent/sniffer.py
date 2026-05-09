@@ -21,8 +21,9 @@ import logging
 import os
 import signal
 import sys
-from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger("novaguard.sniffer")
 
@@ -38,8 +39,8 @@ class DNSSniffer:
     def __init__(
         self,
         interface: str = "eth0",
-        callback: Optional[Callable[[dict[str, Any]], None]] = None,
-        agent_id: Optional[str] = None,
+        callback: Callable[[dict[str, Any]], None] | None = None,
+        agent_id: str | None = None,
     ):
         self.interface = interface
         self.callback = callback
@@ -80,7 +81,7 @@ class DNSSniffer:
                     dest_ip = packet[IP].dst if packet.haslayer(IP) else "unknown"
 
                     log_entry = {
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                         "source_ip": source_ip,
                         "destination_ip": dest_ip,
                         "domain": domain.lower(),
@@ -109,9 +110,7 @@ class DNSSniffer:
                 stop_filter=lambda _: not self._running,
             )
         except PermissionError:
-            logger.error(
-                "Permissão negada. Execute com sudo ou configure CAP_NET_RAW."
-            )
+            logger.error("Permissão negada. Execute com sudo ou configure CAP_NET_RAW.")
             sys.exit(1)
         except OSError as e:
             logger.error("Erro na interface '%s': %s", self.interface, e)
@@ -120,9 +119,7 @@ class DNSSniffer:
     def stop(self) -> None:
         """Para a captura de forma limpa."""
         self._running = False
-        logger.info(
-            "Sniffer stopped. Total packets captured: %d", self._packet_count
-        )
+        logger.info("Sniffer stopped. Total packets captured: %d", self._packet_count)
 
     @staticmethod
     def _resolve_qtype(qtype: int) -> str:
@@ -154,7 +151,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "-i", "--interface",
+        "-i",
+        "--interface",
         default="eth0",
         help="Interface de rede para captura (default: eth0)",
     )

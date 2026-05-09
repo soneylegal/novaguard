@@ -7,11 +7,8 @@ usando mocks do SQLAlchemy Session.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
-
-import pytest
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 
 class TestSyncLogRepository:
@@ -37,7 +34,7 @@ class TestSyncLogRepository:
 
         logs = [
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "source_ip": "10.0.0.1",
                 "destination_ip": "8.8.8.8",
                 "domain": "test.com",
