@@ -5,9 +5,7 @@ Configura:
   - Middlewares (CORS, Rate Limiting, Request ID)
   - Lifecycle hooks (startup/shutdown)
   - OpenAPI metadata
-
-NOTA: Routers e dependências de cache serão registrados
-nos commits subsequentes (C5, C6, C8).
+  - Routers: ingest (POST /api/v1/ingest)
 """
 
 from __future__ import annotations
@@ -22,6 +20,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+from backend.api.v1.ingest_router import router as ingest_router
 from backend.core.config import get_settings
 
 # ── Logging ──────────────────────────────────────────────────────
@@ -109,3 +108,8 @@ async def root():
         "description": "DNS Threat Intelligence Platform",
         "docs": "/docs",
     }
+
+
+# ── Routers ──────────────────────────────────────────────────────
+
+app.include_router(ingest_router, prefix="/api/v1/ingest", tags=["Ingest"])
