@@ -19,7 +19,12 @@ from alembic import context
 # Adiciona o diretório raiz ao path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.infrastructure.db.models import Base
+from backend.infrastructure.db.models import (  # noqa: F401
+    AgentRegistry,
+    Base,
+    DNSLog,
+    ThreatIntel,
+)
 
 # Alembic Config object
 config = context.config
