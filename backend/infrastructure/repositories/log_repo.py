@@ -200,6 +200,12 @@ class SyncLogRepository:
     def __init__(self, session: Session):
         self.session = session
 
+    def __enter__(self) -> SyncLogRepository:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.session.close()
+
     def bulk_insert(self, logs: list[dict[str, Any]]) -> int:
         """
         Inserção em lote de logs enriquecidos.
@@ -220,11 +226,16 @@ class SyncLogRepository:
         Carrega todos os domínios da tabela threat_intel.
         Usado pelo worker para cruzamento local.
         """
-        stmt = select(ThreatIntel.domain)
-        result = self.session.execute(stmt)
-        domains = {row[0] for row in result.all()}
-        logger.info("Loaded %d threat domains from DB.", len(domains))
-        return domains
+        try:
+            stmt = select(ThreatIntel.domain)
+            result = self.session.execute(stmt)
+            domains = {row[0] for row in result.all()}
+            logger.info("Loaded %d threat domains from DB.", len(domains))
+            return domains
+        except Exception as e:
+            self.session.rollback()
+            logger.error("Failed to load threat domains: %s", e)
+            raise
 
     def close(self) -> None:
         """Fecha a sessão síncrona."""

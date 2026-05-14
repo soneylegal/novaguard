@@ -65,10 +65,10 @@ def process_and_enrich_batch(
         agent_id,
     )
 
+    session = get_sync_session()
+    redis_client = None
     try:
         redis_client = _get_sync_redis()
-        session = get_sync_session()
-        repo = SyncLogRepository(session)
 
         # ── 1. Extrair domínios únicos ───────────────────────────
         unique_domains = {log["domain"] for log in logs}
@@ -99,6 +99,7 @@ def process_and_enrich_batch(
 
         # ── 3. Consultar threat_intel no BD (cache misses) ───────
         if uncached_domains:
+            repo = SyncLogRepository(session)
             known_threats = repo.get_threat_domains()
 
             for domain in uncached_domains:
@@ -156,9 +157,6 @@ def process_and_enrich_batch(
             queue="sink",
         )
 
-        session.close()
-        redis_client.close()
-
         result = {
             "batch_id": batch_id,
             "total_logs": len(logs),
@@ -174,3 +172,11 @@ def process_and_enrich_batch(
     except Exception as exc:
         logger.error("Batch %s enrichment failed: %s", batch_id, exc, exc_info=True)
         raise self.retry(exc=exc)
+    finally:
+        # GARANTIA: recursos sempre fechados, independente de exceção
+        if redis_client:
+            try:
+                redis_client.close()
+            except Exception:
+                pass
+        session.close()

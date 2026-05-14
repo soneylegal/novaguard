@@ -42,8 +42,8 @@ async_engine = create_async_engine(
 sync_engine = create_engine(
     _settings.database_url_sync,
     echo=False,
-    pool_size=10,
-    max_overflow=5,
+    pool_size=20,
+    max_overflow=10,
     pool_pre_ping=True,
     pool_recycle=3600,
 )

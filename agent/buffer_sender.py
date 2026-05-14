@@ -11,6 +11,10 @@ Agente de envio com resiliência total:
   5. Ao reconectar, drena o SQLite antes de enviar novos logs.
 
 Garantia: NENHUM log é perdido, mesmo com a API fora do ar por horas.
+
+Nota sobre ambientes virtuais (venv) + sudo:
+Para executar com sudo preservando as bibliotecas do venv, use o binário python
+completo: sudo /path/to/venv/bin/python -m agent.sniffer
 """
 
 from __future__ import annotations
@@ -19,14 +23,19 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 import threading
 import time
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
-
 logger = logging.getLogger("novaguard.buffer_sender")
+
+try:
+    import httpx
+except ImportError:
+    logger.error("A biblioteca 'httpx' não foi encontrada. Execute: pip install httpx")
+    sys.exit(1)
 
 # Máximo de backoff: 5 minutos
 MAX_BACKOFF_SECONDS = 300
@@ -62,6 +71,7 @@ class BufferSender:
 
         # Controle de vida
         self._running = False
+        self._stop_event = threading.Event()
         self._flush_thread: threading.Thread | None = None
 
         # SQLite fallback
@@ -77,7 +87,8 @@ class BufferSender:
 
         # HTTP client (reusa conexões)
         self._http_client = httpx.Client(
-            timeout=30.0,
+            timeout=5.0,
+            follow_redirects=True,
             headers={
                 "X-API-KEY": self.api_key,
                 "Content-Type": "application/json",
@@ -118,12 +129,28 @@ class BufferSender:
         """Para o sender, faz flush final e fecha conexões."""
         logger.info("BufferSender stopping... flushing remaining buffer.")
         self._running = False
+        self._stop_event.set()
 
-        # Flush final
-        self._flush()
+        # Flush final (Emergency Flush bypass se API estiver unhealthy)
+        with self._lock:
+            if self._buffer:
+                batch = self._buffer.copy()
+                self._buffer.clear()
+                if not self._api_healthy:
+                    logger.warning(
+                        "API unhealthy — emergency bypass: persisting to SQLite."
+                    )
+                    self._persist_to_sqlite(batch)
+                else:
+                    self._batch_sequence += 1
+                    success = self._send_batch(batch)
+                    if not success:
+                        self._persist_to_sqlite(batch)
 
         if self._flush_thread and self._flush_thread.is_alive():
-            self._flush_thread.join(timeout=10)
+            self._flush_thread.join(timeout=2.0)
+            if self._flush_thread.is_alive():
+                logger.error("Flush thread did not terminate cleanly. Forcing exit.")
 
         self._http_client.close()
         logger.info("BufferSender stopped. Stats: %s", self.stats)
@@ -147,12 +174,20 @@ class BufferSender:
     def _flush_loop(self) -> None:
         """Thread de flush periódico."""
         while self._running:
-            time.sleep(self.flush_interval)
+            interrupted = self._stop_event.wait(self.flush_interval)
+            if interrupted or not self._running:
+                break
+
+            logger.debug(
+                "Flush loop awake: buffer_size=%d, api_healthy=%s",
+                len(self._buffer),
+                self._api_healthy,
+            )
             self._flush()
 
             # Tenta drenar o SQLite periodicamente
             if not self._api_healthy:
-                time.sleep(self._current_backoff)
+                self._stop_event.wait(self._current_backoff)
             else:
                 self._drain_sqlite()
 
@@ -189,10 +224,14 @@ class BufferSender:
         }
 
         try:
+            start_time = time.perf_counter()
             response = self._http_client.post(
                 self.api_url,
                 json=payload,
+                timeout=5.0,
+                headers={"X-API-KEY": self.api_key, "Content-Type": "application/json"},
             )
+            elapsed = time.perf_counter() - start_time
 
             if response.status_code in (200, 202):
                 self.stats["total_sent"] += len(logs)
@@ -201,8 +240,9 @@ class BufferSender:
                 self._api_healthy = True
 
                 logger.info(
-                    "Batch #%d sent: %d logs (status=%d)",
+                    "Batch #%d sent in %.2fs: %d logs (status=%d)",
                     self._batch_sequence,
+                    elapsed,
                     len(logs),
                     response.status_code,
                 )

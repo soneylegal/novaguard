@@ -11,11 +11,36 @@ Configuração central do Celery com:
 
 from __future__ import annotations
 
+import logging
+
 from celery import Celery
+from celery.signals import worker_process_init
 
 from backend.core.config import get_settings
 
+logger = logging.getLogger("novaguard")
+
 settings = get_settings()
+
+
+@worker_process_init.connect
+def on_worker_init(**kwargs):
+    """Log das tabelas visíveis no banco ao iniciar cada processo worker."""
+    from sqlalchemy import inspect as sa_inspect
+
+    from backend.infrastructure.db.session import sync_engine
+
+    try:
+        inspector = sa_inspect(sync_engine)
+        tables = inspector.get_table_names()
+        logger.info("Worker init — Tables in DB: %s", tables)
+        if "threat_intel" not in tables:
+            logger.error(
+                "CRITICAL: tabela 'threat_intel' NÃO encontrada! " "Execute: alembic upgrade head"
+            )
+    except Exception as e:
+        logger.error("Failed to inspect DB on worker init: %s", e)
+
 
 # ── Celery App ───────────────────────────────────────────────────
 
@@ -41,7 +66,7 @@ celery_app.conf.update(
     },
     # ── Performance ──────────────────────────────────────────────
     worker_prefetch_multiplier=4,
-    worker_max_tasks_per_child=1000,  # Recicla worker a cada 1000 tasks
+    worker_max_tasks_per_child=1000,
     worker_concurrency=4,
     # ── Retry Defaults ───────────────────────────────────────────
     task_acks_late=True,
@@ -49,7 +74,7 @@ celery_app.conf.update(
     task_default_retry_delay=5,
     task_max_retries=3,
     # ── Result ───────────────────────────────────────────────────
-    result_expires=3600,  # Results expiram em 1h
+    result_expires=3600,
     # ── Imports ──────────────────────────────────────────────────
     include=[
         "backend.workers.intel_tasks",

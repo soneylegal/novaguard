@@ -34,7 +34,7 @@ target_metadata = Base.metadata
 # URL do banco via env
 database_url = os.getenv(
     "DATABASE_URL_SYNC",
-    "postgresql+psycopg2://novaguard:novaguard_secret@localhost:5432/novaguard_db",
+    "postgresql+psycopg2://novaguard:novaguard_secret@postgres:5432/novaguard_db",
 )
 config.set_main_option("sqlalchemy.url", database_url)
 

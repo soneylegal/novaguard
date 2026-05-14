@@ -26,7 +26,7 @@ settings = get_settings()
 @celery_app.task(
     name="workers.sink_tasks.bulk_persist_logs",
     bind=True,
-    max_retries=5,
+    max_retries=3,
     default_retry_delay=10,
     acks_late=True,
     queue="sink",
@@ -50,10 +50,9 @@ def bulk_persist_logs(
         total,
     )
 
+    session = get_sync_session()
     try:
-        session = get_sync_session()
         repo = SyncLogRepository(session)
-
         chunk_size = settings.bulk_insert_size
         inserted = 0
 
@@ -69,8 +68,6 @@ def bulk_persist_logs(
                 i + len(chunk),
                 count,
             )
-
-        repo.close()
 
         result = {
             "batch_id": batch_id,
@@ -89,3 +86,6 @@ def bulk_persist_logs(
             exc_info=True,
         )
         raise self.retry(exc=exc, countdown=10 * (self.request.retries + 1))
+    finally:
+        # GARANTIA: sessão sempre devolvida ao pool
+        session.close()

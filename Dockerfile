@@ -23,7 +23,10 @@ RUN apt-get update && \
 FROM base AS deps
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e ".[dev]"
+# Copia o mínimo para satisfazer setuptools.find_packages
+COPY backend/__init__.py ./backend/__init__.py
+COPY agent/__init__.py ./agent/__init__.py
+RUN pip install --no-cache-dir ".[dev]"
 
 # ── Stage: Runtime ───────────────────────────────────────────────
 FROM base AS runtime
