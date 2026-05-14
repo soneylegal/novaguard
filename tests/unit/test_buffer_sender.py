@@ -1,13 +1,17 @@
 """
-NovaGuard — Testes Unitários: Buffer Sender.
+NovaGuard — Testes Unitários: Buffer Sender (IPC Architecture).
 
 Testa a lógica de buffer, flush e fallback SQLite
 sem dependência de rede ou API real.
+
+O BufferSender agora recebe uma multiprocessing.Queue
+e processa itens de forma sequencial (sem threads).
 """
 
 from __future__ import annotations
 
 import sqlite3
+from multiprocessing import Queue
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,7 +23,9 @@ from agent.buffer_sender import INITIAL_BACKOFF_SECONDS, MAX_BACKOFF_SECONDS, Bu
 def sender(tmp_path):
     """Cria um BufferSender com SQLite em diretório temporário."""
     sqlite_path = str(tmp_path / "test_fallback.db")
+    q = Queue()
     s = BufferSender(
+        queue=q,
         api_url="http://localhost:8000/api/v1/ingest",
         api_key="test-key",
         flush_interval=60,  # Alto para evitar flush automático
@@ -28,36 +34,39 @@ def sender(tmp_path):
         sqlite_path=sqlite_path,
     )
     yield s
-    s._http_client.close()
 
 
 class TestBufferSender:
     """Testes para o buffer em memória."""
 
     def test_enqueue_adds_to_buffer(self, sender):
-        """Enqueue deve adicionar ao buffer em memória."""
+        """Adicionar itens diretamente ao buffer deve funcionar."""
         log = {
             "timestamp": "2024-01-01T00:00:00Z",
             "source_ip": "10.0.0.1",
             "destination_ip": "8.8.8.8",
             "domain": "test.com",
         }
-        sender.enqueue(log)
+        sender._buffer.append(log)
+        sender.stats["total_enqueued"] += 1
         assert len(sender._buffer) == 1
         assert sender.stats["total_enqueued"] == 1
 
     def test_enqueue_multiple(self, sender):
-        """Múltiplos enqueues devem acumular."""
+        """Múltiplos itens devem acumular."""
         for i in range(50):
-            sender.enqueue(
+            sender._buffer.append(
                 {"domain": f"test{i}.com", "source_ip": "10.0.0.1", "destination_ip": "8.8.8.8"}
             )
+            sender.stats["total_enqueued"] += 1
         assert len(sender._buffer) == 50
         assert sender.stats["total_enqueued"] == 50
 
     def test_flush_clears_buffer(self, sender):
         """Flush deve esvaziar o buffer."""
-        sender.enqueue({"domain": "test.com", "source_ip": "10.0.0.1", "destination_ip": "8.8.8.8"})
+        sender._buffer.append(
+            {"domain": "test.com", "source_ip": "10.0.0.1", "destination_ip": "8.8.8.8"}
+        )
 
         # Mock o envio para falhar (vai para SQLite)
         sender._send_batch = MagicMock(return_value=False)

@@ -1,20 +1,22 @@
 """
-NovaGuard — Buffer Sender (Lote + Exponential Backoff).
+NovaGuard — Buffer Sender (IPC via multiprocessing.Queue).
 
-Agente de envio com resiliência total:
-  1. Acumula logs em buffer de memória.
-  2. Flush automático a cada N segundos ou N logs (o que vier primeiro).
+Processo autónomo de envio com resiliência total:
+  1. Lê logs de uma multiprocessing.Queue (IPC seguro).
+  2. Acumula em buffer de memória até flush_size ou flush_interval.
   3. Envia via HTTP POST para o API Gateway.
   4. Em caso de falha:
      a. Persiste os logs em SQLite local (fallback).
-     b. Tenta re-enviar com Exponential Backoff (2s, 4s, 8s, 16s...).
+     b. Tenta re-enviar com Exponential Backoff (2s, 4s, 8s…).
   5. Ao reconectar, drena o SQLite antes de enviar novos logs.
 
 Garantia: NENHUM log é perdido, mesmo com a API fora do ar por horas.
+Encerramento: Ao receber a sentinela (None) na Queue, drena o que resta
+e encerra de forma limpa em < 3 segundos.
 
 Nota sobre ambientes virtuais (venv) + sudo:
-Para executar com sudo preservando as bibliotecas do venv, use o binário python
-completo: sudo /path/to/venv/bin/python -m agent.sniffer
+Para executar com sudo preservando as bibliotecas do venv, use o binário
+python completo: sudo /path/to/venv/bin/python -m agent.sniffer
 """
 
 from __future__ import annotations
@@ -24,9 +26,9 @@ import logging
 import os
 import sqlite3
 import sys
-import threading
 import time
 from datetime import UTC, datetime
+from multiprocessing import Queue
 from typing import Any
 
 logger = logging.getLogger("novaguard.buffer_sender")
@@ -41,16 +43,21 @@ except ImportError:
 MAX_BACKOFF_SECONDS = 300
 INITIAL_BACKOFF_SECONDS = 2
 
+# Sentinela de paragem (valor que nunca é um log válido)
+STOP_SENTINEL = None
+
 
 class BufferSender:
     """
-    Buffer em memória com flush periódico e fallback em SQLite.
+    Processo de envio que lê de uma multiprocessing.Queue.
 
-    Thread-safe: usa locks para acesso concorrente ao buffer.
+    Não usa threads internamente — todo o I/O é sequencial dentro
+    do seu próprio processo, eliminando problemas de GIL.
     """
 
     def __init__(
         self,
+        queue: Queue,
         api_url: str,
         api_key: str,
         flush_interval: int = 5,
@@ -58,21 +65,16 @@ class BufferSender:
         agent_id: str = "agent-unknown",
         sqlite_path: str | None = None,
     ):
+        self.queue = queue
         self.api_url = api_url
         self.api_key = api_key
         self.flush_interval = flush_interval
         self.flush_size = flush_size
         self.agent_id = agent_id
 
-        # Buffer em memória (thread-safe)
+        # Buffer em memória (single-process, sem locks)
         self._buffer: list[dict[str, Any]] = []
-        self._lock = threading.Lock()
         self._batch_sequence = 0
-
-        # Controle de vida
-        self._running = False
-        self._stop_event = threading.Event()
-        self._flush_thread: threading.Thread | None = None
 
         # SQLite fallback
         self._sqlite_path = sqlite_path or os.path.join(
@@ -86,14 +88,7 @@ class BufferSender:
         self._api_healthy = True
 
         # HTTP client (reusa conexões)
-        self._http_client = httpx.Client(
-            timeout=5.0,
-            follow_redirects=True,
-            headers={
-                "X-API-KEY": self.api_key,
-                "Content-Type": "application/json",
-            },
-        )
+        self._http_client: httpx.Client | None = None
 
         # Estatísticas
         self.stats = {
@@ -104,19 +99,26 @@ class BufferSender:
             "batches_sent": 0,
         }
 
-    # ── Lifecycle ────────────────────────────────────────────────
+    # ── Main Loop (roda dentro do Process) ───────────────────────
 
-    def start(self) -> None:
-        """Inicia a thread de flush periódico."""
-        self._running = True
-        self._flush_thread = threading.Thread(
-            target=self._flush_loop,
-            daemon=True,
-            name="buffer-flush",
+    def run(self) -> None:
+        """
+        Loop principal — bloqueia até receber a sentinela.
+        Projetado para rodar como target de multiprocessing.Process.
+        """
+        # Criar o httpx.Client aqui (dentro do processo filho)
+        self._http_client = httpx.Client(
+            timeout=5.0,
+            follow_redirects=True,
+            headers={
+                "X-API-KEY": self.api_key,
+                "Content-Type": "application/json",
+            },
         )
-        self._flush_thread.start()
+
         logger.info(
-            "BufferSender started: interval=%ds, size=%d, api=%s",
+            "BufferSender started (PID=%d): interval=%ds, size=%d, api=%s",
+            os.getpid(),
             self.flush_interval,
             self.flush_size,
             self.api_url,
@@ -125,92 +127,109 @@ class BufferSender:
         # Tenta drenar o SQLite ao iniciar
         self._drain_sqlite()
 
-    def stop(self) -> None:
-        """Para o sender, faz flush final e fecha conexões."""
-        logger.info("BufferSender stopping... flushing remaining buffer.")
-        self._running = False
-        self._stop_event.set()
+        last_flush_time = time.monotonic()
 
-        # Flush final (Emergency Flush bypass se API estiver unhealthy)
-        with self._lock:
-            if self._buffer:
-                batch = self._buffer.copy()
-                self._buffer.clear()
-                if not self._api_healthy:
-                    logger.warning(
-                        "API unhealthy — emergency bypass: persisting to SQLite."
-                    )
-                    self._persist_to_sqlite(batch)
-                else:
-                    self._batch_sequence += 1
-                    success = self._send_batch(batch)
-                    if not success:
-                        self._persist_to_sqlite(batch)
+        while True:
+            # Calcula quanto tempo falta até o próximo flush periódico
+            elapsed = time.monotonic() - last_flush_time
+            wait_timeout = max(0.1, self.flush_interval - elapsed)
 
-        if self._flush_thread and self._flush_thread.is_alive():
-            self._flush_thread.join(timeout=2.0)
-            if self._flush_thread.is_alive():
-                logger.error("Flush thread did not terminate cleanly. Forcing exit.")
+            try:
+                item = self.queue.get(timeout=wait_timeout)
+            except Exception:
+                # Timeout — hora de flush periódico
+                item = "__TIMEOUT__"
 
-        self._http_client.close()
-        logger.info("BufferSender stopped. Stats: %s", self.stats)
-
-    # ── Public API ───────────────────────────────────────────────
-
-    def enqueue(self, log_entry: dict[str, Any]) -> None:
-        """
-        Adiciona um log ao buffer em memória.
-        Se o buffer atingir flush_size, dispara flush imediato.
-        """
-        with self._lock:
-            self._buffer.append(log_entry)
-            self.stats["total_enqueued"] += 1
-
-            if len(self._buffer) >= self.flush_size:
-                self._flush()
-
-    # ── Flush Loop ───────────────────────────────────────────────
-
-    def _flush_loop(self) -> None:
-        """Thread de flush periódico."""
-        while self._running:
-            interrupted = self._stop_event.wait(self.flush_interval)
-            if interrupted or not self._running:
+            if item is STOP_SENTINEL:
+                logger.info("Sentinela recebida. Drenando buffer restante...")
+                self._drain_queue_remaining()
+                self._final_flush()
                 break
 
-            logger.debug(
-                "Flush loop awake: buffer_size=%d, api_healthy=%s",
-                len(self._buffer),
-                self._api_healthy,
-            )
-            self._flush()
+            if item != "__TIMEOUT__":
+                self._buffer.append(item)
+                self.stats["total_enqueued"] += 1
 
-            # Tenta drenar o SQLite periodicamente
-            if not self._api_healthy:
-                self._stop_event.wait(self._current_backoff)
-            else:
-                self._drain_sqlite()
+                # Flush por tamanho
+                if len(self._buffer) >= self.flush_size:
+                    self._flush()
+                    last_flush_time = time.monotonic()
+                    continue
+
+            # Flush por tempo
+            if time.monotonic() - last_flush_time >= self.flush_interval:
+                logger.debug(
+                    "Flush loop: buffer_size=%d, api_healthy=%s",
+                    len(self._buffer),
+                    self._api_healthy,
+                )
+                self._flush()
+
+                if self._api_healthy:
+                    self._drain_sqlite()
+
+                last_flush_time = time.monotonic()
+
+        # Cleanup
+        if self._http_client:
+            self._http_client.close()
+        logger.info("BufferSender stopped (PID=%d). Stats: %s", os.getpid(), self.stats)
+
+    # ── Flush ────────────────────────────────────────────────────
 
     def _flush(self) -> None:
-        """
-        Extrai o buffer atual e envia como lote para a API.
-        Se falhar, persiste no SQLite.
-        """
-        with self._lock:
-            if not self._buffer:
-                return
-            batch = self._buffer.copy()
-            self._buffer.clear()
+        """Envia o buffer atual como lote para a API."""
+        if not self._buffer:
+            return
 
+        batch = self._buffer.copy()
+        self._buffer.clear()
         self._batch_sequence += 1
 
         success = self._send_batch(batch)
         if not success:
             self._persist_to_sqlite(batch)
 
+    def _final_flush(self) -> None:
+        """Flush final com timeout agressivo para shutdown rápido."""
+        if not self._buffer:
+            return
+
+        batch = self._buffer.copy()
+        self._buffer.clear()
+        self._batch_sequence += 1
+
+        if not self._api_healthy:
+            logger.warning(
+                "API unhealthy — emergency bypass: persisting %d logs to SQLite.",
+                len(batch),
+            )
+            self._persist_to_sqlite(batch)
+            return
+
+        # Timeout agressivo no flush final (3s) para encerrar rápido
+        success = self._send_batch(batch, timeout=3.0)
+        if not success:
+            self._persist_to_sqlite(batch)
+
+    def _drain_queue_remaining(self) -> None:
+        """Drena todos os itens restantes da Queue após a sentinela."""
+        drained = 0
+        while True:
+            try:
+                item = self.queue.get_nowait()
+                if item is not STOP_SENTINEL:
+                    self._buffer.append(item)
+                    self.stats["total_enqueued"] += 1
+                    drained += 1
+            except Exception:
+                break
+        if drained:
+            logger.info("Drained %d remaining items from queue.", drained)
+
     # ── HTTP Send ────────────────────────────────────────────────
 
-    def _send_batch(self, logs: list[dict[str, Any]]) -> bool:
+    def _send_batch(self, logs: list[dict[str, Any]], timeout: float = 5.0) -> bool:
         """
         Envia um lote de logs para o API Gateway via HTTP POST.
 
@@ -228,8 +247,7 @@ class BufferSender:
             response = self._http_client.post(
                 self.api_url,
                 json=payload,
-                timeout=5.0,
-                headers={"X-API-KEY": self.api_key, "Content-Type": "application/json"},
+                timeout=timeout,
             )
             elapsed = time.perf_counter() - start_time
 
@@ -259,7 +277,7 @@ class BufferSender:
 
         except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
             logger.warning(
-                "Batch #%d send failed (API unreachable): %s. " "Next retry in %ds.",
+                "Batch #%d send failed (API unreachable): %s. Next retry in %ds.",
                 self._batch_sequence,
                 type(e).__name__,
                 self._current_backoff,

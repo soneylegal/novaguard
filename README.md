@@ -1,84 +1,91 @@
-# 🛡️ NovaGuard — Plataforma de Inteligência e Ameaças DNS
+<div align="center">
+
+# 🛡️ NovaGuard
+
+### DNS Threat Intelligence & Network Defense Platform
 
 [![CI](https://github.com/soneylegal/novaguarda/actions/workflows/ci.yml/badge.svg)](https://github.com/soneylegal/novaguarda/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **Enterprise Data Pipeline** distribuído de alta resiliência para ingestão, enriquecimento e análise de tráfego DNS em tempo real. Projetado para processar **milhões de logs/dia** com latência de ingestão < 50ms e garantia de **zero data loss**.
+**Enterprise-grade distributed pipeline** for real-time DNS traffic ingestion, threat enrichment, and analysis.  
+Designed for **millions of logs/day** with sub-50ms ingestion latency and **zero data loss** guarantees.
+
+</div>
 
 ---
 
-## Arquitetura
+## Architecture
 
 ```mermaid
-graph LR
-    subgraph Edge["Edge Network"]
-        A["Scapy Sniffer\nUDP port 53"]
-        B["Memory Buffer\n1000 logs / 5s"]
-        C["SQLite Fallback\nZero-Loss WAL"]
+flowchart LR
+    subgraph EDGE["🖥️ Edge Network"]
+        SC["Scapy Sniffer<br/>UDP port 53"]
+        BUF["Memory Buffer<br/>flush_size ∨ interval"]
+        SQL["SQLite Fallback<br/>WAL • Zero-Loss"]
     end
 
-    subgraph Gateway["API Gateway"]
-        D["FastAPI\n202 Accepted"]
-        E["X-API-KEY\ntiming-safe"]
+    subgraph GW["⚡ API Gateway"]
+        API["FastAPI<br/>202 Accepted < 50ms"]
+        AUTH["X-API-KEY<br/>timing-safe"]
     end
 
-    subgraph Processing["Async Processing"]
-        F["Redis Cache\nCache-Aside TTL 24h"]
-        G["Celery Workers\nenrichment + sink"]
+    subgraph PROC["🧠 Async Processing"]
+        RD["Redis Cache<br/>Cache-Aside • TTL 24h"]
+        CW["Celery Workers<br/>enrichment + sink"]
     end
 
-    subgraph Storage["Persistence"]
-        H["PostgreSQL\nTimescaleDB"]
-        I["Threat Intel\nDomain Blacklist"]
+    subgraph STORE["🗄️ Persistence"]
+        PG["PostgreSQL<br/>TimescaleDB"]
+        TI["threat_intel<br/>Domain Blacklist"]
     end
 
-    A --> B
-    B -->|"HTTP POST batch"| D
-    B -.->|"API offline"| C
-    C -.->|"drain FIFO"| B
-    D --> E
-    E -->|"Celery Queue"| G
-    G <-->|"pipeline GET/SET"| F
-    G -->|"Bulk Insert 1000/tx"| H
-    G <-->|"threat lookup"| I
+    SC -->|"multiprocessing.Queue"| BUF
+    BUF -->|"HTTP POST batch"| API
+    BUF -.->|"API offline"| SQL
+    SQL -.->|"drain FIFO"| BUF
+    API --> AUTH
+    AUTH -->|"Celery send_task"| CW
+    CW <-->|"pipeline GET/SET"| RD
+    CW -->|"Bulk INSERT 1000/tx"| PG
+    CW <-->|"threat lookup"| TI
 ```
 
-### Fluxo de Dados (End-to-End)
+### Data Flow (End-to-End)
 
-| Etapa | Componente | Operação | SLA |
-|:---:|---|---|---|
-| **1** | Scapy Sniffer | Captura DNS (`udp port 53`, `store=False`) | Real-time |
-| **2** | Memory Buffer | Acumula logs (1000 ou 5s, o que vier primeiro) | < 5s |
-| **3** | HTTP Sender | POST batch para API Gateway com `X-API-KEY` | < 100ms |
-| **4** | FastAPI | Valida payload, enfileira no Celery | **< 50ms** (202) |
-| **5** | Enrichment Worker | Cache-Aside: Redis → threat_intel → classifica | < 200ms |
+| Stage | Component | Operation | SLA |
+|:---:|---|---|:---:|
+| **1** | Scapy Process | Packet capture (`udp port 53`, `store=False`) | Real-time |
+| **2** | IPC Queue | `multiprocessing.Queue` → BufferSender process | < 1ms |
+| **3** | BufferSender | Accumulate → HTTP POST batch to API Gateway | ≤ flush interval |
+| **4** | FastAPI | Validate payload, enqueue to Celery | **< 50ms** (202) |
+| **5** | Enrichment Worker | Cache-Aside: Redis → `threat_intel` → classify | < 200ms |
 | **6** | Sink Worker | `INSERT INTO dns_logs VALUES (...) × 1000` | < 500ms |
-| **7** | Fallback (se API ↓) | SQLite WAL + Exponential Backoff (2s → 300s) | Zero-loss |
+| **7** | Fallback | SQLite WAL + Exponential Backoff (2s → 300s cap) | Zero-loss |
 
 ---
 
-## Stack Tecnológico
+## Tech Stack
 
-| Componente | Tecnologia | Propósito |
+| Layer | Technology | Purpose |
 |---|---|---|
-| **API Framework** | FastAPI | I/O assíncrono, OpenAPI nativo, validação Pydantic v2 |
-| **Task Queue** | Celery + Redis | Processamento assíncrono com filas separadas (`enrichment`, `sink`) |
-| **Cache** | Redis | Cache-Aside com pipeline batch (TTL 24h, sub-ms latency) |
-| **Banco de Dados** | PostgreSQL + TimescaleDB | Particionamento por data, queries de séries temporais otimizadas |
-| **ORM** | SQLAlchemy 2.0 | Dual engine (async `asyncpg` + sync `psycopg2`) + Repository Pattern |
-| **Rate Limiting** | slowapi | Proteção anti-DDoS na camada de aplicação |
-| **Autenticação** | API Keys (`X-API-KEY`) | `secrets.compare_digest` — imune a timing side-channel attacks |
-| **Captura de Rede** | Scapy | Parsing DNS em userspace, filtragem por protocolo |
-| **Containerização** | Docker + docker-compose | Stack reproduzível com healthchecks |
-| **CI/CD** | GitHub Actions | Lint (Black, Ruff, MyPy) + Testes automatizados |
+| **API** | FastAPI | Async I/O, OpenAPI native, Pydantic v2 validation |
+| **Task Queue** | Celery + Redis | Async processing with dedicated queues (`enrichment`, `sink`) |
+| **Cache** | Redis 7 | Cache-Aside with pipeline batch (TTL 24h, sub-ms latency) |
+| **Database** | PostgreSQL 16 + TimescaleDB | Time-series optimized with composite indexes |
+| **ORM** | SQLAlchemy 2.0 | Dual engine: async `asyncpg` (API) + sync `psycopg2` (Workers) |
+| **Edge Capture** | Scapy | DNS parsing in userspace, isolated in `multiprocessing.Process` |
+| **Resilience** | SQLite WAL | Local fallback with exponential backoff, zero data loss |
+| **Auth** | API Keys (`X-API-KEY`) | `secrets.compare_digest` — immune to timing side-channel |
+| **CI/CD** | GitHub Actions | Lint (Black, Ruff, MyPy) + Tests with real PostgreSQL/Redis |
+| **Containers** | Docker Compose | Full stack with healthchecks and wait-for-db |
 
 ---
 
-## Início Rápido
+## Quick Start
 
-### 1. Clonar e configurar
+### 1. Clone & Configure
 
 ```bash
 git clone https://github.com/soneylegal/novaguarda.git
@@ -86,21 +93,37 @@ cd novaguarda
 cp .env.example .env
 ```
 
-### 2. Subir a stack completa
+### 2. Launch Backend (Docker)
 
 ```bash
 docker compose up -d --build
 ```
 
-| Serviço | URL | Descrição |
+| Service | URL | Description |
 |---|---|---|
-| API Gateway | `http://localhost:8000` | FastAPI (OpenAPI docs em `/docs`) |
-| Swagger UI | `http://localhost:8000/docs` | Documentação interativa da API |
-| Flower | `http://localhost:5555` | Monitoramento de workers Celery |
-| PostgreSQL | `localhost:5432` | TimescaleDB (time-series) |
+| API Gateway | `http://localhost:8000` | FastAPI (OpenAPI docs at `/docs`) |
+| Swagger UI | `http://localhost:8000/docs` | Interactive API documentation |
+| Flower | `http://localhost:5555` | Celery worker monitoring |
+| PostgreSQL | `localhost:5432` | TimescaleDB (time-series storage) |
 | Redis | `localhost:6379` | Cache (DB0) + Broker (DB1) |
 
-### 3. Desenvolvimento local
+### 3. Seed Threat Intelligence
+
+```bash
+# Base threats (phishing, malware domains)
+docker compose run --rm api python -m scripts.seed_threat_intel
+
+# Stress test threats (c2_server, phishing, malware mix)
+docker compose run --rm api python -m scripts.seed_mixed_test
+```
+
+---
+
+## Edge Agent Setup
+
+The Edge Agent captures live DNS traffic and streams it to the API Gateway. It requires **root privileges** (or `CAP_NET_RAW`) and runs outside Docker on the target machine.
+
+### Install Dependencies
 
 ```bash
 python -m venv .venv
@@ -108,138 +131,184 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### 4. Executar testes
+### Launch Agent
 
 ```bash
-pytest tests/ -v --cov=backend --cov=agent --cov-report=term-missing
-```
+# Via wrapper script (recommended — handles venv + sudo)
+./run_agent.sh --interface enp1s0 --buffer-size 50 --buffer-interval 5
 
-### 5. Executar o agente de borda
-
-```bash
-sudo python -m agent.sniffer \
-  --interface eth0 \
-  --api-url http://localhost:8000/api/v1/ingest \
+# Or directly
+sudo ./.venv/bin/python -m agent.sniffer \
+  --interface enp1s0 \
+  --api-url http://localhost:8000/api/v1/ingest/ \
   --api-key "agent-key-alpha-001" \
-  --buffer-size 1000 \
+  --buffer-size 50 \
   --buffer-interval 5
 ```
 
+> **Graceful Shutdown:** Press `Ctrl+C` once. The agent stops Scapy, drains the IPC queue, flushes remaining logs to the API (3s timeout), and exits cleanly. No `Ctrl+Z` needed.
+
 ---
 
-## API Endpoints
+## Validation — Stress Test
 
-### Ingestão (Alta Performance)
+Use this procedure to validate the full pipeline after deployment:
 
-| Método | Rota | Descrição | Auth | Response |
+```bash
+# ── Terminal 1: Watch worker logs ──────────────────────────────
+docker compose logs -f worker
+
+# ── Terminal 2: Seed + Flush cache + Launch agent ──────────────
+docker compose run --rm api python -m scripts.seed_mixed_test
+docker compose exec redis redis-cli FLUSHALL
+./run_agent.sh --interface enp1s0 --buffer-size 1 --buffer-interval 2
+
+# ── Terminal 3: Fire test threats ──────────────────────────────
+for domain in c2-strike.net phishing-banco.com malware-drop.org stealer-payload.info; do
+  echo "→ Resolving $domain"
+  nslookup "$domain"
+  sleep 1
+done
+```
+
+**Expected Worker Output:**
+
+```
+[INFO] Loaded 8 threat domains from DB.
+[INFO] Batch #1 enrichment complete: malicious_count=4
+[INFO] Task workers.intel_tasks.process_and_enrich_batch[...] succeeded
+[INFO] Sync bulk insert: 4 DNS logs persisted.
+[INFO] Task workers.sink_tasks.bulk_persist_logs[...] succeeded
+```
+
+✅ All 4 domains classified as `malicious` via `threat_intel` lookup → cached in Redis → persisted in PostgreSQL.
+
+---
+
+## API Reference
+
+### Ingestion (High Performance)
+
+| Method | Route | Description | Auth | Response |
 |---|---|---|---|---|
-| `POST` | `/api/v1/ingest/` | Recebe lote de logs DNS | `X-API-KEY` | `202 Accepted` |
+| `POST` | `/api/v1/ingest/` | Receive batch of DNS logs | `X-API-KEY` | `202 Accepted` |
 
-### Consulta (Dashboard)
+### Query (Dashboard)
 
-| Método | Rota | Descrição | Auth |
+| Method | Route | Description | Auth |
 |---|---|---|---|
-| `GET` | `/api/v1/query/logs` | Listagem paginada com filtros (domínio, threat, agente, IP, período) | `X-API-KEY` |
-| `GET` | `/api/v1/query/stats` | Estatísticas agregadas (total, 24h, por severidade) | `X-API-KEY` |
-| `GET` | `/api/v1/query/threats` | Top N domínios maliciosos com IPs de origem | `X-API-KEY` |
-| `GET` | `/api/v1/query/health` | Health check (Redis, PostgreSQL, Celery) | Público |
+| `GET` | `/api/v1/query/logs` | Paginated listing with filters (domain, threat, agent, IP, period) | `X-API-KEY` |
+| `GET` | `/api/v1/query/stats` | Aggregated statistics (total, 24h, by severity) | `X-API-KEY` |
+| `GET` | `/api/v1/query/threats` | Top N malicious domains with source IPs | `X-API-KEY` |
+| `GET` | `/api/v1/query/health` | Health check (Redis, PostgreSQL, Celery) | Public |
 
 ---
 
-## Padrões de Design
+## Design Patterns
 
-### 🏗️ Repository Pattern — Isolamento Total de Persistência
+### 🏗️ Repository Pattern
 
-O código de negócios **nunca toca diretamente no ORM**. Toda interação com o banco passa por repositórios tipados, permitindo troca de engine (ex: PostgreSQL → ClickHouse) sem alterar uma linha de lógica de negócios. Testes unitários usam `MagicMock` no lugar da sessão real — **zero dependência de infraestrutura para validar regras de negócio**.
+Business logic **never touches the ORM directly**. All database access flows through typed repositories, enabling engine swaps (e.g., PostgreSQL → ClickHouse) without modifying business rules. Unit tests use `MagicMock` sessions — **zero infrastructure dependency**.
 
-### ⚡ Cache-Aside — Classificação de Domínios em Sub-Milissegundos
+### ⚡ Cache-Aside (Redis Pipeline Batch)
 
-Cada lote de logs é deduplicado por domínio. O worker executa um **Redis pipeline batch** (N GETs em 1 roundtrip). Cache hits retornam classificação instantânea. Misses consultam a tabela `threat_intel`, classificam e populam o cache com **TTL de 24 horas**. Na prática, após warm-up, **95%+ dos domínios são resolvidos via cache** — eliminando queries repetidas ao banco.
+Each log batch is deduplicated by domain. The enrichment worker executes a **Redis pipeline** (N GETs in 1 roundtrip). Cache hits return instant classification. Misses query `threat_intel`, classify, and populate cache with **24h TTL**. After warm-up, **95%+ domains resolve via cache**.
 
-### 🔄 Exponential Backoff — Resiliência de Rede Guarantida
+### 🔄 IPC via multiprocessing (GIL-Free)
 
-Se o API Gateway estiver indisponível, o agente **nunca descarta logs**. Os dados são persistidos em SQLite local (WAL mode) e o retry segue backoff exponencial: `2s → 4s → 8s → 16s → ... → 300s (cap)`. Ao reconectar, o agente **drena o SQLite em ordem FIFO** antes de enviar novos dados. Resultado: **zero data loss** mesmo com horas de downtime.
+Scapy and the HTTP sender run in **separate OS processes** communicating via `multiprocessing.Queue`. No thread contention, no GIL blocking. Shutdown uses a `STOP_SENTINEL` pattern for deterministic drain.
 
-### 📦 Bulk Inserts — Throughput de Escrita Maximizado
+### 📦 Bulk Inserts (1000/transaction)
 
-Logs são persistidos em lotes de **1.000 registros por transação** via `INSERT INTO ... VALUES (...), (...), ...` — eliminando overhead de ORM individual. Lotes maiores são automaticamente particionados em chunks para **evitar locks prolongados** no PostgreSQL. Este padrão reduz o número de transações em **~1000x** comparado com inserts individuais.
+Logs are persisted in batches of **1,000 records per transaction** via raw `INSERT INTO ... VALUES`. Larger batches auto-partition into chunks to avoid prolonged locks. This reduces transaction count by **~1000x** vs individual inserts.
+
+### 🛡️ Zero Data Loss (SQLite Fallback)
+
+If the API is unreachable, logs are persisted in local **SQLite (WAL mode)** with exponential backoff: `2s → 4s → 8s → ... → 300s cap`. On reconnection, the agent **drains SQLite in FIFO order** before sending new data.
 
 ---
 
-## Estrutura do Projeto
+## Project Structure
 
 ```
 novaguarda/
-├── agent/                       # 🖥️ Sniffer Edge (máquinas alvo)
-│   ├── sniffer.py               #    Captura Scapy + parsing DNS
-│   └── buffer_sender.py         #    Buffer memória + backoff + SQLite fallback
+├── agent/                          # 🖥️ Edge Sniffer (target machines)
+│   ├── sniffer.py                  #    Orchestrator: Scapy + Sender processes
+│   └── buffer_sender.py            #    Queue-driven sender + SQLite fallback
 ├── backend/
-│   ├── main.py                  # ⚡ FastAPI + Middlewares + CORS + Lifespan
-│   ├── core/                    # 🔧 Configuração e Segurança
-│   │   ├── config.py            #    Pydantic Settings (.env)
-│   │   ├── security.py          #    API Key auth (timing-safe)
-│   │   └── cache.py             #    Redis singleton + Cache-Aside batch
-│   ├── api/v1/                  # 🌐 Controllers (HTTP)
-│   │   ├── ingest_router.py     #    POST /ingest → 202 Accepted
-│   │   └── query_router.py      #    GET /logs, /stats, /threats, /health
-│   ├── domain/                  # 📐 Entidades de Negócio (Pydantic)
-│   │   └── schemas.py           #    DNSLogItem, LogBatchCreate, EnrichedLog...
-│   ├── infrastructure/          # 🗄️ Acesso a Dados
+│   ├── main.py                     # ⚡ FastAPI + Middlewares + CORS + Lifespan
+│   ├── core/
+│   │   ├── config.py               #    Pydantic Settings (.env)
+│   │   ├── security.py             #    API Key auth (timing-safe)
+│   │   └── cache.py                #    Redis singleton + Cache-Aside batch
+│   ├── api/v1/
+│   │   ├── ingest_router.py        #    POST /ingest → 202 Accepted
+│   │   └── query_router.py         #    GET /logs, /stats, /threats, /health
+│   ├── domain/
+│   │   └── schemas.py              #    DNSLogItem, LogBatchCreate, EnrichedLog
+│   ├── infrastructure/
 │   │   ├── db/
-│   │   │   ├── session.py       #    Async + Sync engines (dual pool)
-│   │   │   └── models.py        #    DNSLog, ThreatIntel, AgentRegistry
+│   │   │   ├── session.py          #    Async + Sync engines (dual pool)
+│   │   │   └── models.py           #    DNSLog, ThreatIntel, AgentRegistry
 │   │   └── repositories/
-│   │       ├── base.py          #    CRUD genérico (Generic[ModelType])
-│   │       └── log_repo.py      #    Bulk insert + aggregations + dashboard
-│   └── workers/                 # 🧠 Processamento em Background
-│       ├── celery_app.py        #    Filas: enrichment, sink
-│       ├── intel_tasks.py       #    Cache-Aside enrichment pipeline
-│       └── sink_tasks.py        #    Chunked bulk persist (1000/tx)
-├── .github/workflows/ci.yml    # 🔄 GitHub Actions (lint + test)
-├── docker-compose.yml           # 🐳 Stack: API + TimescaleDB + Redis + Worker + Flower
-├── Dockerfile                   # 📦 Multi-stage build (python:3.11-slim)
-├── alembic/                     # 🔀 Migrações de banco (autogenerate)
+│   │       ├── base.py             #    Generic CRUD (Generic[ModelType])
+│   │       └── log_repo.py         #    Bulk insert + aggregations + dashboard
+│   └── workers/
+│       ├── celery_app.py           #    Queues: enrichment, sink + schema inspector
+│       ├── intel_tasks.py          #    Cache-Aside enrichment (leak-proof)
+│       └── sink_tasks.py           #    Chunked bulk persist (leak-proof)
+├── scripts/
+│   ├── seed_threat_intel.py        #    ORM seed: base threat domains
+│   └── seed_mixed_test.py          #    ORM seed: stress test domains
 ├── tests/
-│   ├── e2e/test_api.py          # 🧪 TestClient + dependency_overrides
-│   └── unit/                    # 🧪 pytest + MagicMock
-└── pyproject.toml               # 📋 Dependencies + Black + Ruff + MyPy
+│   ├── e2e/                        #    TestClient + dependency_overrides
+│   └── unit/                       #    pytest + MagicMock (29 tests)
+├── .github/workflows/ci.yml       #    CI with PostgreSQL + Redis containers
+├── docker-compose.yml              #    Full stack with healthchecks
+├── Dockerfile                      #    Multi-stage build (python:3.11-slim)
+├── alembic/                        #    Database migrations (autogenerate)
+└── pyproject.toml                  #    Dependencies + Black + Ruff + MyPy
 ```
 
 ---
 
-## Testes
+## Environment Variables
 
-> **31 testes a passar** — 25 Unitários + 6 E2E — com mock do Repository e API TestClient.
+All centralized in `.env` and loaded via `pydantic_settings.BaseSettings`:
 
-| Suite | Testes | Cobertura | Estratégia |
-|---|:---:|---|---|
-| `test_schemas.py` | 11 | Validação Pydantic (domain, IP, batch, enum) | Sem mocks — Pydantic puro |
-| `test_buffer_sender.py` | 9 | Buffer, flush, backoff, SQLite fallback | `MagicMock(send_batch)` |
-| `test_repository.py` | 4 | SyncLogRepository (bulk, threats, close) | `MagicMock(session)` |
-| `test_api.py` | 6 | Root, Ingest (401/403/422/202), X-Request-ID | `TestClient` + `dependency_overrides` |
-| **Total** | **31** | | **Zero dependência de infra** |
-
----
-
-## Variáveis de Ambiente
-
-Todas centralizadas em `.env` e carregadas via `pydantic_settings.BaseSettings`:
-
-| Variável | Descrição | Default |
+| Variable | Description | Default |
 |---|---|---|
 | `DATABASE_URL` | PostgreSQL async (`asyncpg`) | `postgresql+asyncpg://...` |
 | `DATABASE_URL_SYNC` | PostgreSQL sync (`psycopg2`) | `postgresql+psycopg2://...` |
 | `REDIS_URL` | Redis cache (DB 0) | `redis://localhost:6379/0` |
 | `CELERY_BROKER_URL` | Redis broker (DB 1) | `redis://localhost:6379/1` |
-| `API_KEYS` | JSON array de chaves autorizadas | `[]` |
-| `RATE_LIMIT` | Limite de requisições (slowapi) | `60/minute` |
-| `CACHE_TTL_SECONDS` | TTL do cache Redis | `86400` (24h) |
-| `BULK_INSERT_SIZE` | Logs por transação de insert | `1000` |
+| `API_KEYS` | JSON array of authorized keys | `[]` |
+| `RATE_LIMIT` | Request rate limit (slowapi) | `60/minute` |
+| `CACHE_TTL_SECONDS` | Redis cache TTL | `86400` (24h) |
+| `BULK_INSERT_SIZE` | Logs per insert transaction | `1000` |
 
 ---
 
-## Licença
+## Testing
 
-Distribuído sob a licença MIT. Veja [`LICENSE`](LICENSE) para mais informações.
+> **29 tests passing** — Unit + E2E — with full infrastructure mocking.
+
+```bash
+pytest tests/ -v --cov=backend --cov=agent --cov-report=term-missing
+```
+
+| Suite | Tests | Strategy |
+|---|:---:|---|
+| `test_schemas.py` | 11 | Pydantic validation (domain, IP, batch, enum) |
+| `test_buffer_sender.py` | 9 | Buffer, flush, backoff, SQLite fallback |
+| `test_celery_tasks.py` | 4 | Enrichment + sink task smoke tests |
+| `test_repository.py` | 4 | SyncLogRepository (bulk, threats, close) |
+| **Total** | **29** | **Zero infrastructure dependency** |
+
+---
+
+## License
+
+Distributed under the MIT License. See [`LICENSE`](LICENSE) for details.
 
 © 2026 Davi Laurindo

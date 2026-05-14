@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-05-14
+
+### Changed
+
+- **IPC Architecture (Multiprocessing)** — O Edge Agent foi completamente reescrito. Scapy e BufferSender correm agora em processos isolados (`multiprocessing.Process`) comunicando via `multiprocessing.Queue`. Eliminação total de contenção de GIL e deadlocks no shutdown.
+- **Graceful Shutdown via STOP_SENTINEL** — O processo principal envia `None` na Queue como sentinela. O BufferSender drena todos os itens restantes e executa um flush final com timeout agressivo de 3s, encerrando de forma limpa sem necessidade de `SIGTSTP` (Ctrl+Z).
+- **Session Management Bulletproof** — As tasks Celery (`intel_tasks`, `sink_tasks`) foram refatoradas para o padrão `try/finally` com `session.close()` incondicional. Elimina connection leaks que causavam `QueuePool exhaustion` (TimeoutError).
+- **CI Pipeline com Service Containers** — O workflow GitHub Actions agora levanta PostgreSQL 16 e Redis 7 como service containers. A CI executa `alembic upgrade head` contra um banco efémero e valida a integridade do esquema (presença das 3 tabelas) antes dos testes.
+
+### Added
+
+- **Worker Schema Inspector** — Hook `@worker_process_init.connect` que imprime todas as tabelas visíveis no banco ao iniciar cada processo worker, com alerta explícito se `threat_intel` estiver ausente.
+- **ORM Seed Scripts** — `scripts/seed_threat_intel.py` e `scripts/seed_mixed_test.py` para popular a tabela `threat_intel` via ORM, respeitando defaults Python-level (`id`, `source`, `confidence`) que o SQL raw violava. Idempotentes com tratamento de colisões.
+- **Stress Test Misto** — Seed com 4 tipos de ameaça (`c2_server`, `phishing`, `malware`) para validação de performance do pipeline Cache-Aside.
+
+### Fixed
+
+- **UndefinedTable: `threat_intel`** — Causa raiz: volume PostgreSQL stale com migração marcada como aplicada mas DDL não executado. Resolvido com procedimento de rebuild forçado (`down -v` + `build --no-cache` + `alembic upgrade head`).
+- **QueuePool Exhaustion** — Sessões orphaned em caso de exceção antes do bloco `with` nos workers. O `session.close()` no `finally` garante devolução ao pool mesmo em falha catastrófica.
+- **Dockerfile Multi-Stage** — `pip install -e` no stage `deps` falhava silenciosamente (código fonte ausente). Corrigido para `pip install .` com cópia mínima dos `__init__.py`.
+
+---
+
 ## [1.0.0] — 2026-05-09
 
 ### Added

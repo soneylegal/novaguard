@@ -38,6 +38,7 @@ COPY --from=deps /usr/local/bin /usr/local/bin
 COPY backend/ ./backend/
 COPY agent/ ./agent/
 COPY alembic/ ./alembic/
+COPY scripts/ ./scripts/
 COPY alembic.ini ./
 COPY pyproject.toml ./
 

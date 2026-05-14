@@ -1,0 +1,1 @@
+# NovaGuard — Scripts utilitários
