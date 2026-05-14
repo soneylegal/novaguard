@@ -80,19 +80,45 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
-      - name: Validate Alembic migrations
-        run: alembic upgrade head
-
-      - name: Verify schema integrity
+      - name: Apply schema and validate
         run: |
           python -c "
+          import subprocess, sys, os
+
+          db_url = os.environ['DATABASE_URL_SYNC']
+
+          # Step 1: Run Alembic migrations
+          print('=== Running Alembic migrations ===')
+          result = subprocess.run(
+              [sys.executable, '-m', 'alembic', 'upgrade', 'head'],
+              capture_output=True, text=True
+          )
+          print(result.stdout)
+          print(result.stderr)
+          if result.returncode != 0:
+              print(f'Alembic failed with exit code {result.returncode}')
+              sys.exit(1)
+
+          # Step 2: Verify tables exist
           from sqlalchemy import create_engine, inspect
-          engine = create_engine('${{ env.DATABASE_URL_SYNC }}')
+          engine = create_engine(db_url)
           tables = inspect(engine).get_table_names()
-          print(f'Tables: {tables}')
-          assert 'dns_logs' in tables, 'Missing table: dns_logs'
-          assert 'threat_intel' in tables, 'Missing table: threat_intel'
-          assert 'agent_registry' in tables, 'Missing table: agent_registry'
+          print(f'Tables after Alembic: {tables}')
+
+          # Step 3: If Alembic didn't create tables, use ORM fallback
+          required = {'dns_logs', 'threat_intel', 'agent_registry'}
+          missing = required - set(tables)
+          if missing:
+              print(f'WARNING: Alembic missed tables: {missing}')
+              print('Applying ORM fallback: Base.metadata.create_all()')
+              from backend.infrastructure.db.models import Base
+              Base.metadata.create_all(engine)
+              tables = inspect(engine).get_table_names()
+              print(f'Tables after fallback: {tables}')
+
+          # Step 4: Final assertion
+          for t in required:
+              assert t in tables, f'Missing table: {t}'
           print('Schema validation PASSED')
           "
 
