@@ -1,0 +1,19 @@
+apiVersion: 1
+
+datasources:
+  - name: NovaGuardDB
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: novaguard_db
+    user: novaguard
+    secureJsonData:
+      password: novaguard_secret
+    jsonData:
+      sslmode: disable
+      maxOpenConns: 10
+      maxIdleConns: 10
+      connMaxLifetime: 14400
+      postgresVersion: 1600
+      timescaledb: true
+    isDefault: true
