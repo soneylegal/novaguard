@@ -69,6 +69,29 @@ class TestSyncLogRepository:
         assert domains == {"malware.com", "phishing.net", "evil.org"}
         assert len(domains) == 3
 
+    def test_get_threat_domains_with_types(self):
+        """Deve retornar um dicionário de domínios e tipos de ameaça."""
+        from backend.infrastructure.repositories.log_repo import SyncLogRepository
+
+        mock_session = MagicMock()
+        mock_result = MagicMock()
+        mock_result.all.return_value = [
+            ("malware.com", "malware"),
+            ("phishing.net", "phishing"),
+            ("evil.org", "c2_server"),
+        ]
+        mock_session.execute.return_value = mock_result
+
+        repo = SyncLogRepository(mock_session)
+        domains_with_types = repo.get_threat_domains_with_types()
+
+        assert domains_with_types == {
+            "malware.com": "malware",
+            "phishing.net": "phishing",
+            "evil.org": "c2_server",
+        }
+        assert len(domains_with_types) == 3
+
     def test_close(self):
         """Close deve chamar session.close()."""
         from backend.infrastructure.repositories.log_repo import SyncLogRepository

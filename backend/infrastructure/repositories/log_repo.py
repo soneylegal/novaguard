@@ -237,6 +237,22 @@ class SyncLogRepository:
             logger.error("Failed to load threat domains: %s", e)
             raise
 
+    def get_threat_domains_with_types(self) -> dict[str, str]:
+        """
+        Carrega todos os domínios da tabela threat_intel com seus respectivos tipos.
+        Usado pelo worker para cruzamento local e alertas.
+        """
+        try:
+            stmt = select(ThreatIntel.domain, ThreatIntel.threat_type)
+            result = self.session.execute(stmt)
+            domains = {row[0]: row[1] for row in result.all()}
+            logger.info("Loaded %d threat domains with types from DB.", len(domains))
+            return domains
+        except Exception as e:
+            self.session.rollback()
+            logger.error("Failed to load threat domains with types: %s", e)
+            raise
+
     def close(self) -> None:
         """Fecha a sessão síncrona."""
         self.session.close()

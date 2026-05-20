@@ -63,6 +63,7 @@ celery_app.conf.update(
     task_routes={
         "workers.intel_tasks.*": {"queue": "enrichment"},
         "workers.sink_tasks.*": {"queue": "sink"},
+        "workers.alert_tasks.*": {"queue": "alerts"},
     },
     # ── Performance ──────────────────────────────────────────────
     worker_prefetch_multiplier=4,
@@ -79,5 +80,6 @@ celery_app.conf.update(
     include=[
         "backend.workers.intel_tasks",
         "backend.workers.sink_tasks",
+        "backend.workers.alert_tasks",
     ],
 )

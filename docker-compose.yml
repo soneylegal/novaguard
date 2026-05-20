@@ -90,7 +90,7 @@ services:
         while ! timeout 1s bash -c 'echo > /dev/tcp/postgres/5432' 2>/dev/null; do
           sleep 2
         done
-        celery -A backend.workers.celery_app worker --loglevel=info --concurrency=4 --queues=enrichment,sink --max-tasks-per-child=1000
+        celery -A backend.workers.celery_app worker --loglevel=info --concurrency=4 --queues=enrichment,sink,alerts --max-tasks-per-child=1000
       "
 
   # ── Celery Flower (Monitoring) ───────────────────────────────

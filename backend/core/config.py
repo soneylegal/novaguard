@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # ── Bulk Insert ──────────────────────────────────────────────
     bulk_insert_size: int = 1000
 
+    # ── Webhook Alerting ─────────────────────────────────────────
+    webhook_url: str | None = None
+
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"

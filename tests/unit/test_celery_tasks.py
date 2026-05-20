@@ -53,7 +53,7 @@ class TestProcessAndEnrichBatch:
 
         # Mock Repository — no known threats
         mock_repo_instance = MagicMock()
-        mock_repo_instance.get_threat_domains.return_value = set()
+        mock_repo_instance.get_threat_domains_with_types.return_value = {}
         mock_repo.return_value = mock_repo_instance
 
         from backend.workers.intel_tasks import process_and_enrich_batch

@@ -100,11 +100,11 @@ def process_and_enrich_batch(
         # ── 3. Consultar threat_intel no BD (cache misses) ───────
         if uncached_domains:
             repo = SyncLogRepository(session)
-            known_threats = repo.get_threat_domains()
+            known_threats = repo.get_threat_domains_with_types()
 
             for domain in uncached_domains:
                 if domain in known_threats:
-                    classifications[domain] = "malicious"
+                    classifications[domain] = known_threats[domain]
                 else:
                     classifications[domain] = "safe"
 
@@ -130,7 +130,17 @@ def process_and_enrich_batch(
 
         for log in logs:
             domain = log["domain"]
-            threat = classifications.get(domain, "unknown")
+            classification = classifications.get(domain, "unknown")
+
+            if classification == "safe":
+                threat_level = "safe"
+                threat_source = None
+            elif classification == "unknown":
+                threat_level = "unknown"
+                threat_source = None
+            else:
+                threat_level = "malicious"
+                threat_source = "threat_intel_db"
 
             enriched_logs.append(
                 {
@@ -141,13 +151,40 @@ def process_and_enrich_batch(
                     "query_type": log.get("query_type", "A"),
                     "protocol": log.get("protocol", "DNS"),
                     "agent_id": log.get("agent_id") or agent_id,
-                    "threat_level": threat,
-                    "threat_source": "threat_intel_db" if threat == "malicious" else None,
+                    "threat_level": threat_level,
+                    "threat_source": threat_source,
                     "enriched_at": now,
                 }
             )
 
-        # ── 6. Despachar para o sink (persistência) ──────────────
+        # ── 5.1. Identificar ameaças críticas e disparar alertas ─
+        alerted_keys = set()
+        for log in enriched_logs:
+            if log["threat_level"] == "malicious":
+                threat_type = classifications.get(log["domain"], "malicious")
+                key = (log["source_ip"], log["domain"], threat_type)
+                if key not in alerted_keys:
+                    alerted_keys.add(key)
+
+                    # Garantir que o timestamp seja serializado como string ISO
+                    ts = log["timestamp"]
+                    if hasattr(ts, "isoformat"):
+                        ts_str = ts.isoformat()
+                    else:
+                        ts_str = str(ts)
+
+                    celery_app.send_task(
+                        "workers.alert_tasks.send_alert_task",
+                        kwargs={
+                            "source_ip": log["source_ip"],
+                            "domain": log["domain"],
+                            "threat_type": threat_type,
+                            "timestamp": ts_str,
+                        },
+                        queue="alerts",
+                    )
+
+        # ── 6. Despacha para o sink (persistência) ──────────────
         celery_app.send_task(
             "workers.sink_tasks.bulk_persist_logs",
             kwargs={
@@ -163,7 +200,9 @@ def process_and_enrich_batch(
             "unique_domains": len(unique_domains),
             "cache_hits": len(unique_domains) - len(uncached_domains),
             "cache_misses": len(uncached_domains),
-            "malicious_count": sum(1 for c in classifications.values() if c == "malicious"),
+            "malicious_count": sum(
+                1 for c in classifications.values() if c not in ("safe", "unknown")
+            ),
         }
 
         logger.info("Batch %s enrichment complete: %s", batch_id, result)
