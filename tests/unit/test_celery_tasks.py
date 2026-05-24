@@ -53,7 +53,7 @@ class TestProcessAndEnrichBatch:
 
         # Mock Repository — no known threats
         mock_repo_instance = MagicMock()
-        mock_repo_instance.get_threat_domains_with_types.return_value = {}
+        mock_repo_instance.get_threat_types_for_domains.return_value = {}
         mock_repo.return_value = mock_repo_instance
 
         from backend.workers.intel_tasks import process_and_enrich_batch
@@ -76,6 +76,63 @@ class TestProcessAndEnrichBatch:
         assert result["total_logs"] == 1
         assert result["cache_misses"] == 1
         mock_celery.send_task.assert_called_once()
+
+    @patch("backend.workers.intel_tasks.celery_app")
+    @patch("backend.workers.intel_tasks.SyncLogRepository")
+    @patch("backend.workers.intel_tasks.get_sync_session")
+    @patch("backend.workers.intel_tasks.sync_redis")
+    def test_dga_entropy_logs_classified_as_suspicious(
+        self, mock_redis_mod, mock_session, mock_repo, mock_celery
+    ):
+        """Um log contendo domínio DGA de alta entropia deve ser classificado como suspicious."""
+        # Mock Redis — cache miss
+        mock_pipeline = MagicMock()
+        mock_pipeline.execute.return_value = [None]
+        mock_redis_client = MagicMock()
+        mock_redis_client.pipeline.return_value = mock_pipeline
+        mock_redis_mod.from_url.return_value = mock_redis_client
+
+        # Mock Repository — no known threats
+        mock_repo_instance = MagicMock()
+        mock_repo_instance.get_threat_types_for_domains.return_value = {}
+        mock_repo.return_value = mock_repo_instance
+
+        from backend.workers.intel_tasks import process_and_enrich_batch
+
+        result = process_and_enrich_batch(
+            batch_id="test-batch-dga-001",
+            agent_id="test-agent",
+            logs=[
+                {
+                    "timestamp": "2026-05-21T12:00:00+00:00",
+                    "source_ip": "10.0.0.1",
+                    "destination_ip": "8.8.8.8",
+                    "domain": "xjz897fka31s.co.uk",  # Alta entropia DGA
+                    "query_type": "A",
+                    "protocol": "DNS",
+                }
+            ],
+        )
+
+        assert result["total_logs"] == 1
+        assert result["cache_misses"] == 1
+        assert result["suspicious_count"] == 1
+        assert result["malicious_count"] == 0
+
+        # Certificar que a tarefa de persistência (sink) foi enviada com o log
+        # marcado como suspicious
+        sink_call_args = mock_celery.send_task.call_args_list
+        sink_task_call = None
+        for call in sink_call_args:
+            if call[1]["queue"] == "sink":
+                sink_task_call = call
+                break
+
+        assert sink_task_call is not None
+        enriched_logs = sink_task_call[1]["kwargs"]["enriched_logs"]
+        assert len(enriched_logs) == 1
+        assert enriched_logs[0]["threat_level"] == "suspicious"
+        assert enriched_logs[0]["threat_source"] == "dga_entropy_analysis"
 
 
 class TestBulkPersistLogs:

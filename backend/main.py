@@ -22,7 +22,9 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from backend.api.v1.ingest_router import router as ingest_router
+from backend.api.v1.query_router import metrics_router
 from backend.api.v1.query_router import router as query_router
+from backend.api.v1.taxii_router import router as taxii_router
 from backend.core.cache import get_redis
 from backend.core.config import get_settings
 
@@ -127,3 +129,5 @@ async def root():
 
 app.include_router(ingest_router, prefix="/api/v1/ingest", tags=["Ingest"])
 app.include_router(query_router, prefix="/api/v1/query", tags=["Query"])
+app.include_router(taxii_router, prefix="/api/v1/taxii2", tags=["TAXII 2.1"])
+app.include_router(metrics_router, prefix="/api/v1/metrics", tags=["Metrics"])

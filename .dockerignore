@@ -1,0 +1,9 @@
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+novaguard.egg-info
+*.log
+errosnoslogs.txt
+tests/

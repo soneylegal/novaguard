@@ -30,10 +30,10 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
-      - name: Black (format check)
+      - name: Run Black Formatter Check
         run: black --check --diff .
 
-      - name: Ruff (lint)
+      - name: Run Ruff Linter Check
         run: ruff check .
 
       - name: MyPy (type check)

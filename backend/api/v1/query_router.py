@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,6 +32,7 @@ from backend.infrastructure.repositories.log_repo import LogRepository
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Consultas & Dashboard"])
+metrics_router = APIRouter(tags=["Métricas Públicas"])
 
 
 @router.get(
@@ -186,3 +187,24 @@ async def health_check() -> HealthResponse:
         redis=redis_status,
         celery=celery_status,
     )
+
+
+@metrics_router.get(
+    "/threat-summary",
+    summary="Resumo público de ameaças para integração SIEM",
+    responses={
+        200: {"description": "Retorna estatísticas agregadas de ameaças recentes."},
+        401: {"description": "API Key não fornecida."},
+        403: {"description": "API Key inválida."},
+    },
+)
+async def get_threat_summary(
+    session: Annotated[AsyncSession, Depends(get_async_session)],
+    _api_key: Annotated[str, Depends(validate_api_key)],
+) -> dict[str, Any]:
+    """
+    Retorna volumetrias de ameaças (maliciosas e suspeitas DGA),
+    além dos principais IPs afetados e domínios consultados.
+    """
+    repo = LogRepository(session)
+    return await repo.get_threat_summary_stats()

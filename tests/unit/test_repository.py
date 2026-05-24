@@ -92,6 +92,38 @@ class TestSyncLogRepository:
         }
         assert len(domains_with_types) == 3
 
+    def test_get_threat_types_for_domains(self):
+        """Deve retornar um dicionário apenas com os domínios consultados que forem maliciosos."""
+        from backend.infrastructure.repositories.log_repo import SyncLogRepository
+
+        mock_session = MagicMock()
+        mock_result = MagicMock()
+        mock_result.all.return_value = [
+            ("malware.com", "malware"),
+            ("phishing.net", "phishing"),
+        ]
+        mock_session.execute.return_value = mock_result
+
+        repo = SyncLogRepository(mock_session)
+        domains_with_types = repo.get_threat_types_for_domains(["malware.com", "phishing.net"])
+
+        assert domains_with_types == {
+            "malware.com": "malware",
+            "phishing.net": "phishing",
+        }
+        assert len(domains_with_types) == 2
+        mock_session.execute.assert_called_once()
+
+    def test_get_threat_types_for_domains_empty(self):
+        """Lista de domínios vazia deve retornar dicionário vazio sem executar query."""
+        from backend.infrastructure.repositories.log_repo import SyncLogRepository
+
+        mock_session = MagicMock()
+        repo = SyncLogRepository(mock_session)
+        result = repo.get_threat_types_for_domains([])
+        assert result == {}
+        mock_session.execute.assert_not_called()
+
     def test_close(self):
         """Close deve chamar session.close()."""
         from backend.infrastructure.repositories.log_repo import SyncLogRepository

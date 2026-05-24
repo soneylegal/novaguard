@@ -4,8 +4,9 @@ NovaGuard — Celery Application.
 Configuração central do Celery com:
   - Redis como broker e result backend
   - Serialização via JSON (segurança)
-  - Filas separadas para enrichment e sink
+  - Filas separadas para enrichment, sink, alerts e feeds
   - Task routing automático
+  - Celery Beat para sincronização periódica de feeds
   - Retry policies para resiliência
 """
 
@@ -14,6 +15,7 @@ from __future__ import annotations
 import logging
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_process_init
 
 from backend.core.config import get_settings
@@ -64,6 +66,7 @@ celery_app.conf.update(
         "workers.intel_tasks.*": {"queue": "enrichment"},
         "workers.sink_tasks.*": {"queue": "sink"},
         "workers.alert_tasks.*": {"queue": "alerts"},
+        "workers.feed_tasks.*": {"queue": "feeds"},
     },
     # ── Performance ──────────────────────────────────────────────
     worker_prefetch_multiplier=4,
@@ -81,5 +84,18 @@ celery_app.conf.update(
         "backend.workers.intel_tasks",
         "backend.workers.sink_tasks",
         "backend.workers.alert_tasks",
+        "backend.workers.feed_tasks",
     ],
+    beat_schedule={
+        "sync-threat-feeds-every-6h": {
+            "task": "workers.feed_tasks.sync_all_feeds",
+            "schedule": crontab(minute=0, hour="*/6"),  # A cada 6 horas
+            "options": {"queue": "feeds"},
+        },
+        "sync-top-domains-every-24h": {
+            "task": "workers.feed_tasks.sync_top_domains",
+            "schedule": crontab(minute=30, hour=2),  # Diariamente às 02:30 UTC
+            "options": {"queue": "feeds"},
+        },
+    },
 )

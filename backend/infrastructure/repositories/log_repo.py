@@ -188,6 +188,79 @@ class LogRepository(BaseRepository[DNSLog]):
             conditions.append(DNSLog.timestamp <= end_time)
         return conditions
 
+    async def get_threat_logs_for_stix(
+        self,
+        limit: int = 100,
+        added_after: datetime | None = None,
+    ) -> Sequence[DNSLog]:
+        """
+        Retorna logs DNS que são ameaças (malicious ou suspicious)
+        para gerar indicadores STIX/TAXII.
+        """
+        stmt = select(DNSLog).where(DNSLog.threat_level.in_(["malicious", "suspicious"]))
+        if added_after:
+            stmt = stmt.where(DNSLog.timestamp > added_after)
+
+        stmt = stmt.order_by(desc(DNSLog.timestamp)).limit(limit)
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
+    async def get_threat_summary_stats(self) -> dict[str, Any]:
+        """
+        Retorna estatísticas agregadas de ameaças (malicious/suspicious)
+        para o endpoint de resumo público.
+        """
+        # Contagem total de logs
+        total_logs = await self.count()
+
+        # Contagem de malicious
+        stmt_malicious = (
+            select(func.count()).select_from(DNSLog).where(DNSLog.threat_level == "malicious")
+        )
+        malicious_count = (await self.session.execute(stmt_malicious)).scalar_one()
+
+        # Contagem de suspicious
+        stmt_suspicious = (
+            select(func.count()).select_from(DNSLog).where(DNSLog.threat_level == "suspicious")
+        )
+        suspicious_count = (await self.session.execute(stmt_suspicious)).scalar_one()
+
+        # Top 5 IP de Origem que geraram mais ameaças
+        stmt_ips = (
+            select(DNSLog.source_ip, func.count(DNSLog.id).label("count"))
+            .where(DNSLog.threat_level.in_(["malicious", "suspicious"]))
+            .group_by(DNSLog.source_ip)
+            .order_by(desc("count"))
+            .limit(5)
+        )
+        ips_result = await self.session.execute(stmt_ips)
+        top_ips = [{"ip": row[0], "count": row[1]} for row in ips_result.all()]
+
+        # Top 5 Domínios de Ameaça
+        stmt_domains = (
+            select(DNSLog.domain, DNSLog.threat_level, func.count(DNSLog.id).label("count"))
+            .where(DNSLog.threat_level.in_(["malicious", "suspicious"]))
+            .group_by(DNSLog.domain, DNSLog.threat_level)
+            .order_by(desc("count"))
+            .limit(5)
+        )
+        domains_result = await self.session.execute(stmt_domains)
+        top_domains = [
+            {"domain": row[0], "threat_level": row[1], "count": row[2]}
+            for row in domains_result.all()
+        ]
+
+        return {
+            "total_logs": total_logs,
+            "threats": {
+                "malicious": malicious_count,
+                "suspicious": suspicious_count,
+                "total_threats": malicious_count + suspicious_count,
+            },
+            "top_affected_ips": top_ips,
+            "top_threat_domains": top_domains,
+        }
+
 
 class SyncLogRepository:
     """
@@ -251,6 +324,26 @@ class SyncLogRepository:
         except Exception as e:
             self.session.rollback()
             logger.error("Failed to load threat domains with types: %s", e)
+            raise
+
+    def get_threat_types_for_domains(self, domains: list[str]) -> dict[str, str]:
+        """
+        Carrega os tipos de ameaça apenas para os domínios especificados.
+        Evita carregar toda a tabela do banco em memória.
+        """
+        if not domains:
+            return {}
+        try:
+            stmt = select(ThreatIntel.domain, ThreatIntel.threat_type).where(
+                ThreatIntel.domain.in_(domains)
+            )
+            result = self.session.execute(stmt)
+            mapped = {row[0]: row[1] for row in result.all()}
+            logger.info("Loaded %d matched threat domains from DB.", len(mapped))
+            return mapped
+        except Exception as e:
+            self.session.rollback()
+            logger.error("Failed to load threat types for domains: %s", e)
             raise
 
     def close(self) -> None:

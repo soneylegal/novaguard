@@ -167,6 +167,145 @@ def _sender_worker(
     sender.run()
 
 
+# ── Processo do IPS Listener (filho) ─────────────────────────────
+
+
+def _ips_worker(
+    interface: str,
+    redis_url: str,
+    stop_event: multiprocessing.Event,
+) -> None:
+    """
+    Processo dedicado a escutar comandos de IPS via Redis Pub/Sub
+    e aplicar bloqueios através de regras locais do iptables.
+    """
+    import json
+    import subprocess
+
+    import redis
+
+    # Re-configurar logging no processo filho
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s │ %(levelname)-8s │ %(name)s │ %(message)s",
+    )
+    child_logger = logging.getLogger("novaguard.sniffer.ips")
+    child_logger.info("IPS worker started (PID=%d)", os.getpid())
+
+    # Scapy para detecção do IP da interface
+    try:
+        from scapy.all import get_if_addr
+    except ImportError:
+        child_logger.error("Scapy não instalado no processo IPS.")
+        return
+
+    # Whitelist padrão
+    whitelist = {"127.0.0.1", "localhost", "1.1.1.1", "8.8.8.8"}
+    try:
+        if_ip = get_if_addr(interface)
+        if if_ip and if_ip != "0.0.0.0":
+            whitelist.add(if_ip)
+            child_logger.info("Added interface IP %s to Whitelist", if_ip)
+    except Exception as e:
+        child_logger.warning("Could not auto-detect interface IP for whitelist: %s", e)
+
+    # Conectar ao Redis e subscrever ao canal
+    try:
+        r = redis.from_url(redis_url, decode_responses=True)
+        pubsub = r.pubsub()
+        pubsub.subscribe("novaguard:ips:commands")
+        child_logger.info("Subscribed to Redis channel novaguard:ips:commands on %s", redis_url)
+    except Exception as e:
+        child_logger.error("Failed to connect to Redis/subscribe: %s", e)
+        return
+
+    while not stop_event.is_set():
+        try:
+            # Polling com timeout de 1 segundo para verificar stop_event regularmente
+            message = pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            if message:
+                data_str = message.get("data")
+                if not data_str:
+                    continue
+
+                payload = json.loads(data_str)
+                command = payload.get("command")
+                source_ip = payload.get("source_ip")
+
+                if not command or not source_ip:
+                    continue
+
+                if command == "quarantine":
+                    if source_ip in whitelist:
+                        child_logger.warning(
+                            "[IPS] IP %s está na whitelist. Bloqueio ignorado para evitar lockout.",
+                            source_ip,
+                        )
+                        continue
+
+                    # Verificar se a regra já existe no iptables
+                    check_cmd = ["iptables", "-C", "INPUT", "-s", source_ip, "-j", "DROP"]
+                    res = subprocess.run(check_cmd, capture_output=True)
+                    if res.returncode == 0:
+                        child_logger.info(
+                            "[IPS] Regra de quarentena já existe no firewall para o IP: %s",
+                            source_ip,
+                        )
+                    else:
+                        # Injetar regra
+                        add_cmd = ["iptables", "-A", "INPUT", "-s", source_ip, "-j", "DROP"]
+                        add_res = subprocess.run(add_cmd, capture_output=True, text=True)
+                        if add_res.returncode == 0:
+                            child_logger.warning(
+                                "[IPS] Aplicando regra de quarentena no firewall "
+                                "para o IP: %s via iptables.",
+                                source_ip,
+                            )
+                        else:
+                            child_logger.error(
+                                "[IPS] Erro ao aplicar regra para o IP %s: %s",
+                                source_ip,
+                                add_res.stderr,
+                            )
+
+                elif command == "un-quarantine":
+                    # Verificar se a regra existe no iptables
+                    check_cmd = ["iptables", "-C", "INPUT", "-s", source_ip, "-j", "DROP"]
+                    res = subprocess.run(check_cmd, capture_output=True)
+                    if res.returncode == 0:
+                        # Remover regra
+                        del_cmd = ["iptables", "-D", "INPUT", "-s", source_ip, "-j", "DROP"]
+                        del_res = subprocess.run(del_cmd, capture_output=True, text=True)
+                        if del_res.returncode == 0:
+                            child_logger.warning(
+                                "[IPS] Removida regra de quarentena no firewall "
+                                "para o IP: %s via iptables.",
+                                source_ip,
+                            )
+                        else:
+                            child_logger.error(
+                                "[IPS] Erro ao remover regra para o IP %s: %s",
+                                source_ip,
+                                del_res.stderr,
+                            )
+                    else:
+                        child_logger.info(
+                            "[IPS] Regra de quarentena não existe no firewall para o IP: %s",
+                            source_ip,
+                        )
+
+        except Exception as e:
+            child_logger.error("[IPS] Error in loop: %s", e)
+
+    # Cleanup ao encerrar
+    try:
+        pubsub.close()
+        r.close()
+    except Exception:
+        pass
+    child_logger.info("IPS worker stopped (PID=%d)", os.getpid())
+
+
 # ── Orquestrador (Processo Principal) ────────────────────────────
 
 
@@ -208,6 +347,11 @@ def main():
         type=int,
         default=int(os.getenv("BUFFER_FLUSH_SIZE", "1000")),
         help="Tamanho máximo do buffer antes do flush (default: 1000)",
+    )
+    parser.add_argument(
+        "--redis-url",
+        default=os.getenv("REDIS_URL_HOST", "redis://localhost:6379/0"),
+        help="URL do Redis para escutar comandos de IPS (default: redis://localhost:6379/0)",
     )
 
     args = parser.parse_args()
@@ -254,13 +398,22 @@ def main():
         daemon=False,
     )
 
+    ips_proc = Process(
+        target=_ips_worker,
+        args=(args.interface, args.redis_url, stop_event),
+        name="novaguard-ips",
+        daemon=False,
+    )
+
     sender_proc.start()
     scapy_proc.start()
+    ips_proc.start()
 
     logger.info(
-        "Processes spawned: scapy(PID=%d), sender(PID=%d)",
+        "Processes spawned: scapy(PID=%d), sender(PID=%d), ips(PID=%d)",
         scapy_proc.pid,
         sender_proc.pid,
+        ips_proc.pid,
     )
 
     # ── Graceful Shutdown ────────────────────────────────────────
@@ -276,7 +429,7 @@ def main():
         sig_name = signal.Signals(sig).name
         logger.info("Signal %s received. Initiating graceful shutdown...", sig_name)
 
-        # 1. Parar o Scapy (stop_filter irá encerrar o sniff)
+        # 1. Parar o Scapy e o IPS (stop_event irá encerrar os loops)
         stop_event.set()
 
         # 2. Esperar o Scapy terminar (max 3s)
@@ -286,10 +439,17 @@ def main():
             scapy_proc.terminate()
             scapy_proc.join(timeout=1.0)
 
-        # 3. Enviar sentinela para o Sender (drena e encerra)
+        # 3. Esperar o IPS terminar (max 3s)
+        ips_proc.join(timeout=3.0)
+        if ips_proc.is_alive():
+            logger.warning("IPS process did not stop. Terminating.")
+            ips_proc.terminate()
+            ips_proc.join(timeout=1.0)
+
+        # 4. Enviar sentinela para o Sender (drena e encerra)
         ipc_queue.put(None)
 
-        # 4. Esperar o Sender drenar (max 5s)
+        # 5. Esperar o Sender drenar (max 5s)
         sender_proc.join(timeout=5.0)
         if sender_proc.is_alive():
             logger.warning("Sender process did not stop. Terminating.")
@@ -308,6 +468,10 @@ def main():
         # Se o Scapy morrer por conta própria, fazer shutdown graceful
         if not shutdown_triggered:
             logger.info("Scapy process exited. Sending sentinel to sender...")
+            stop_event.set()
+            ips_proc.join(timeout=3.0)
+            if ips_proc.is_alive():
+                ips_proc.terminate()
             ipc_queue.put(None)
             sender_proc.join(timeout=5.0)
     except KeyboardInterrupt:

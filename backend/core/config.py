@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # ── Bulk Insert ──────────────────────────────────────────────
     bulk_insert_size: int = 1000
 
+    # ── DGA Entropy Detection ─────────────────────────────────────
+    dga_entropy_threshold: float = 3.2
+    dga_min_length: int = 8
+
     # ── Webhook Alerting ─────────────────────────────────────────
     webhook_url: str | None = None
 

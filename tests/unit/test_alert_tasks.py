@@ -95,6 +95,22 @@ class TestSendAlertTask:
         assert fields["Tipo de Ameaça"] == "`PHISHING`"
         assert "MÉDIO" in fields["Severidade"]
 
+    @patch("backend.workers.alert_tasks.settings")
+    def test_dga_suspicious_alert_formatting(self, mock_settings):
+        """Domínios suspensos DGA devem ter severidade MEDIUM e mensagem adequada."""
+        mock_settings.webhook_url = None
+
+        result = send_alert_task(
+            source_ip="192.168.1.100",
+            domain="xjz897fka31s.co.uk",
+            threat_type="dga_suspicious",
+            timestamp="2026-05-21T10:00:00Z",
+        )
+
+        assert result["status"] == "skipped"
+        assert result["alert"]["details"]["severity"] == "MEDIUM"
+        assert "alta entropia" in result["alert"]["message"]
+
     @patch("backend.workers.alert_tasks.send_alert_task.retry")
     @patch("backend.workers.alert_tasks.httpx.post")
     @patch("backend.workers.alert_tasks.settings")

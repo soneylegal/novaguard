@@ -22,18 +22,21 @@ SEVERITY_MAPPING = {
     "c2_server": "CRITICAL",
     "malware": "HIGH",
     "phishing": "MEDIUM",
+    "dga_suspicious": "MEDIUM",
 }
 
 EMOJI_MAPPING = {
     "c2_server": "🚨",
     "malware": "⚠️",
     "phishing": "🔍",
+    "dga_suspicious": "🧠",
 }
 
 COLOR_MAPPING = {
     "c2_server": 15158332,  # Red (0xE74C3C)
     "malware": 15105570,  # Orange (0xE67E22)
     "phishing": 15844367,  # Yellow (0xF1C40F)
+    "dga_suspicious": 15844367,  # Yellow (0xF1C40F)
 }
 
 PORTUGUESE_SEVERITY = {
@@ -81,6 +84,11 @@ def send_alert_task(
         message = (
             f"🔍 [MÉDIO] A máquina {source_ip} tentou acessar um domínio "
             f"suspeito de Phishing: {domain}!"
+        )
+    elif threat_type.lower() == "dga_suspicious":
+        message = (
+            f"🧠 [MÉDIO] A máquina {source_ip} tentou acessar o domínio {domain}, "
+            f"que apresenta alta entropia e suspeita de DGA (geração aleatória)!"
         )
     else:
         message = (
